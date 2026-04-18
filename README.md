@@ -4,7 +4,7 @@ JFFL 是一个基于 [Javassist](https://www.javassist.org/) 的Minecraft Forge�
 
 ---
 
-## [Engliah](https://github.com/wertygh/JFFL-Javassist-Framework-for-Forge-Loader-/blob/main/README_English.md)
+## [English](https://github.com/wertygh/JFFL-Javassist-Framework-for-Forge-Loader-/blob/main/README_English.md)
 
 ---
 
