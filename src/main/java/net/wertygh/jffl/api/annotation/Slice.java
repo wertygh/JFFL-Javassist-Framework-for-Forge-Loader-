@@ -2,10 +2,10 @@ package net.wertygh.jffl.api.annotation;
 
 import java.lang.annotation.*;
 
-@Retention(value=RetentionPolicy.RUNTIME)
-@Target(value={})
+@Retention(RetentionPolicy.RUNTIME)
+@Target({})
 public @interface Slice {
-    At from() default @At(value=At.Value.HEAD);
-    At to() default @At(value=At.Value.TAIL);
+    At from() default @At(At.Value.HEAD);
+    At to() default @At(At.Value.TAIL);
     String id() default "";
 }

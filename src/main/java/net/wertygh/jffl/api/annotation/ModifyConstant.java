@@ -2,9 +2,9 @@ package net.wertygh.jffl.api.annotation;
 
 import java.lang.annotation.*;
 
-@Retention(value=RetentionPolicy.RUNTIME)
-@Target(value={ElementType.METHOD})
-@Repeatable(value=ModifyConstant.List.class)
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+@Repeatable(ModifyConstant.List.class)
 public @interface ModifyConstant {
     String method();
     String desc() default "";
@@ -17,7 +17,7 @@ public @interface ModifyConstant {
     Slice slice() default @Slice;
     boolean cancellable() default false;
     boolean optional() default false;
-    @Retention(value=RetentionPolicy.RUNTIME)
-    @Target(value={ElementType.METHOD})
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
     @interface List {ModifyConstant[] value();}
 }

@@ -2,8 +2,8 @@ package net.wertygh.jffl.api.annotation;
 
 import java.lang.annotation.*;
 
-@Retention(value=RetentionPolicy.RUNTIME)
-@Target(value={ElementType.METHOD})
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
 public @interface Accessor {
     String target();
     boolean invoker() default false;

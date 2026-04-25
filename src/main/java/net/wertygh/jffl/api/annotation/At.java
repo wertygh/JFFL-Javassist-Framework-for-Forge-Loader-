@@ -2,8 +2,8 @@ package net.wertygh.jffl.api.annotation;
 
 import java.lang.annotation.*;
 
-@Retention(value=RetentionPolicy.RUNTIME)
-@Target(value={})
+@Retention(RetentionPolicy.RUNTIME)
+@Target({})
 public @interface At {
     Value value();
     String target() default "";

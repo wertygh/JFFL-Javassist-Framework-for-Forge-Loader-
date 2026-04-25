@@ -2,9 +2,9 @@ package net.wertygh.jffl.api.annotation;
 
 import java.lang.annotation.*;
 
-@Retention(value=RetentionPolicy.RUNTIME)
-@Target(value={ElementType.METHOD})
-@Repeatable(value=ModifyVariable.List.class)
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+@Repeatable(ModifyVariable.List.class)
 public @interface ModifyVariable {
     String method();
     String desc() default "";
@@ -12,7 +12,7 @@ public @interface ModifyVariable {
     int index() default -1;
     int line() default -1;
     At at() default @At(value=At.Value.HEAD);
-    @Retention(value=RetentionPolicy.RUNTIME)
-    @Target(value={ElementType.METHOD})
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
     @interface List {ModifyVariable[] value();}
 }

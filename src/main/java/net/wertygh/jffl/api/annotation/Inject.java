@@ -2,9 +2,9 @@ package net.wertygh.jffl.api.annotation;
 
 import java.lang.annotation.*;
 
-@Retention(value=RetentionPolicy.RUNTIME)
-@Target(value={ElementType.METHOD})
-@Repeatable(value=Inject.List.class)
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+@Repeatable(Inject.List.class)
 public @interface Inject {
     String method();
     String desc() default "";
@@ -12,7 +12,7 @@ public @interface Inject {
     Slice slice() default @Slice;
     boolean cancellable() default false;
     boolean optional() default false;
-    @Retention(value=RetentionPolicy.RUNTIME)
-    @Target(value={ElementType.METHOD})
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
     @interface List {Inject[] value();}
 }
