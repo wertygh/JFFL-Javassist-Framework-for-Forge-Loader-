@@ -73,18 +73,21 @@ public class JavassistTransformationService implements ITransformationService {
         if (!DevEnvironment.isProduction()) {
             LOGGER.info("当前开发环境, 跳过SRG映射加载");
         }
-        LOGGER.info("JFFL已初始化：{}个目标类", registry.getTargetClasses().size());
+        LOGGER.info("JFFL已初始化：{}个补丁目标类, {}个插件",
+                registry.getTargetClasses().size(), registry.getTransformerPlugins().size());
     }
 
     @Override
     public @NotNull List<ITransformer> transformers() {
-        Set<String> targets = registry.getTargetClasses();
+        Set<String> targets = registry.getTransformerTargetClasses();
         List<ITransformer> out = new ArrayList<>();
         if (DevEnvironment.isProduction()) {
             out.add(new JavassistRemapperTransformer());
         }
         if (!targets.isEmpty()) {
-            out.add(new JavassistTransformer(targets, engine));
+            out.add(new JavassistTransformer(targets, engine, registry.getTransformerPlugins()));
+        } else if (registry.hasTransformerPlugins()) {
+            LOGGER.warn("已注册插件, 但没有可挂载目标类; 请让插件targetClasses()返回目标类, 或注册至少一个JFFL补丁目标, 不然你注册这个插件的意义是什么");
         } else {
             LOGGER.info("未注册任何用户补丁");
         }
