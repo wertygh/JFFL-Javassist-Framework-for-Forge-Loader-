@@ -125,8 +125,12 @@ public class MethodCopier {
             } else if (insn instanceof TypeInsnNode tin) {
                 if (tin.desc.equals(patchOwner)) {
                     tin.desc = targetOwner;
-                } else if (tin.desc.contains(patchOwner)) {
-                    tin.desc = tin.desc.replace(patchOwner, targetOwner);
+                } else if (tin.desc.startsWith("[")) {
+                    String wrappedOld = "L" + patchOwner + ";";
+                    String wrappedNew = "L" + targetOwner + ";";
+                    if (tin.desc.contains(wrappedOld)) {
+                        tin.desc = tin.desc.replace(wrappedOld, wrappedNew);
+                    }
                 }
             } else if (insn instanceof LdcInsnNode ldc) {
                 if (ldc.cst instanceof Type t) {
