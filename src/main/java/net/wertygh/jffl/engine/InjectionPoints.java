@@ -70,7 +70,6 @@ public class InjectionPoints {
         return -1;
     }
 
-
     public static void apply(CtMethod method, At at, String src, Slice slice) throws CannotCompileException {
         int[] range = resolveSliceRange(method, slice);
         apply(method, at, src, range[0], range[1]);
@@ -96,6 +95,7 @@ public class InjectionPoints {
         final int wantOrdinal = at.ordinal();
         final String target = at.target();
         final int[] seen = {0};
+        final int[] matched = {0};
         if (at.value() == At.Value.INVOKE) {
             method.instrument(new ExprEditor() {
                 @Override public void edit(MethodCall mc) throws CannotCompileException {
@@ -103,6 +103,7 @@ public class InjectionPoints {
                     if (!matchesInvokeTarget(mc, target)) return;
                     int idx = seen[0]++;
                     if (wantOrdinal >= 0 && idx != wantOrdinal) return;
+                    matched[0]++;
                     mc.replace(body);
                 }
             });
@@ -113,21 +114,45 @@ public class InjectionPoints {
                     if (!target.isEmpty() && !target.equals(fa.getFieldName())) return;
                     int idx = seen[0]++;
                     if (wantOrdinal >= 0 && idx != wantOrdinal) return;
+                    matched[0]++;
                     fa.replace(body);
                 }
             });
         }
+        if (matched[0] == 0) {
+            LOGGER.warn("@Redirect未命中{}.{} at={} target={} ordinal={}",
+                    method.getDeclaringClass().getName(), method.getName(), at.value(), target, wantOrdinal);
+        }
     }
 
     public static void apply(CtMethod method, At at, String src, int sliceFrom, int sliceTo) throws CannotCompileException {
-        switch (at.value()) {
-            case HEAD -> method.insertBefore(src);
-            case RETURN -> method.insertAfter(src, false);
-            case TAIL -> insertBeforeLastReturn(method, src);
-            case LINE -> method.insertAt(at.line(), src);
+        boolean matched = switch (at.value()) {
+            case HEAD -> {
+                method.insertBefore(src);
+                yield true;
+            }
+            case RETURN -> {
+                method.insertAfter(src, false);
+                yield true;
+            }
+            case TAIL -> {
+                insertBeforeLastReturn(method, src);
+                yield true;
+            }
+            case LINE -> {
+                method.insertAt(at.line(), src);
+                yield true;
+            }
             case INVOKE -> instrumentInvoke(method, at, src, sliceFrom, sliceTo);
             case FIELD -> instrumentField(method, at, src, sliceFrom, sliceTo);
-            case CONSTANT -> instrumentConstant(method, at, src, sliceFrom, sliceTo);
+            case CONSTANT -> {
+                instrumentConstant(method, at, src, sliceFrom, sliceTo);
+                yield true;
+            }
+        };
+        if (!matched) {
+            LOGGER.warn("@At({})未命中{}.{} target={} ordinal={}",
+                    at.value(), method.getDeclaringClass().getName(), method.getName(), at.target(), at.ordinal());
         }
     }
 
@@ -137,23 +162,26 @@ public class InjectionPoints {
         return lineNumber >= sliceFrom && lineNumber <= sliceTo;
     }
 
-    private static void instrumentInvoke(CtMethod method, At at, String src, int sliceFrom, int sliceTo) throws CannotCompileException {
+    private static boolean instrumentInvoke(CtMethod method, At at, String src, int sliceFrom, int sliceTo) throws CannotCompileException {
         final int wantOrdinal = at.ordinal();
         final String target = at.target();
         final boolean shiftAfter = at.shift() == At.Shift.AFTER;
         final int[] seen = {0};
+        final int[] matched = {0};
         method.instrument(new ExprEditor() {
             @Override public void edit(MethodCall mc) throws CannotCompileException {
                 if (!isInSlice(mc.getLineNumber(), sliceFrom, sliceTo)) return;
                 if (!matchesInvokeTarget(mc, target)) return;
                 int idx = seen[0]++;
                 if (wantOrdinal >= 0 && idx != wantOrdinal) return;
+                matched[0]++;
                 String body = shiftAfter
                         ? "{ $_ = $proceed($$); " + src + " }"
                         : "{ " + src + " $_ = $proceed($$); }";
                 mc.replace(body);
             }
         });
+        return matched[0] > 0;
     }
 
     static boolean matchesInvokeTarget(MethodCall mc, String target) {
@@ -165,17 +193,19 @@ public class InjectionPoints {
         return target.equals(shortForm);
     }
 
-    private static void instrumentField(CtMethod method, At at, String src, int sliceFrom, int sliceTo) throws CannotCompileException {
+    private static boolean instrumentField(CtMethod method, At at, String src, int sliceFrom, int sliceTo) throws CannotCompileException {
         final int wantOrdinal = at.ordinal();
         final String target = at.target();
         final boolean shiftAfter = at.shift() == At.Shift.AFTER;
         final int[] seen = {0};
+        final int[] matched = {0};
         method.instrument(new ExprEditor() {
             @Override public void edit(FieldAccess fa) throws CannotCompileException {
                 if (!isInSlice(fa.getLineNumber(), sliceFrom, sliceTo)) return;
                 if (!target.isEmpty() && !target.equals(fa.getFieldName())) return;
                 int idx = seen[0]++;
                 if (wantOrdinal >= 0 && idx != wantOrdinal) return;
+                matched[0]++;
                 String proceed = fa.isReader() ? "$_ = $proceed($$);" : "$proceed($$);";
                 String body = shiftAfter
                         ? "{ " + proceed + " " + src + " }"
@@ -183,12 +213,13 @@ public class InjectionPoints {
                 fa.replace(body);
             }
         });
+        return matched[0] > 0;
     }
 
     private static void instrumentConstant(CtMethod method, At at, String src, int sliceFrom, int sliceTo) throws CannotCompileException {
         if (at.intValue() != Integer.MIN_VALUE) {
             replaceIntConstant(method, at.intValue(), at.ordinal(), src, sliceFrom, sliceTo);
-        } else if (!"\0".equals(at.stringValue())) {
+        } else if (!" ".equals(at.stringValue())) {
             replaceStringConstant(method, at.stringValue(), at.ordinal(), src, sliceFrom, sliceTo);
         } else {
             double dv = at.doubleValue();
@@ -245,8 +276,11 @@ public class InjectionPoints {
                     if (!isInSlice(line, sliceFrom, sliceTo)) continue;          
                     Integer loaded = readIntConstant(it, cp, pos, op);
                     if (loaded == null || loaded != wanted) continue;
-                    if (currentOccurrence < nextTarget) { currentOccurrence++; continue; }
-                    if (wantOrdinal >= 0 && currentOccurrence != wantOrdinal) { currentOccurrence++; continue; }
+                    if (currentOccurrence < nextTarget) {currentOccurrence++; continue;}
+                    if (wantOrdinal >= 0 && currentOccurrence != wantOrdinal) {
+                        currentOccurrence++;
+                        continue;
+                    }
                     rewriteIntInstruction(it, cp, pos, op, newValue);
                     nextTarget = currentOccurrence + 1;
                     changed = (wantOrdinal < 0);
@@ -267,12 +301,12 @@ public class InjectionPoints {
             writeWithNops(it, pos, origSize, new byte[]{(byte) Opcode.BIPUSH, (byte) newValue});
         } else if (newValue >= Short.MIN_VALUE && newValue <= Short.MAX_VALUE) {
             writeWithNops(it, pos, origSize, new byte[]{
-                    (byte) Opcode.SIPUSH, (byte) (newValue >> 8), (byte) newValue
+                (byte) Opcode.SIPUSH, (byte) (newValue >> 8), (byte) newValue
             });
         } else {
             int cpIdx = cp.addIntegerInfo(newValue);
             writeWithNops(it, pos, origSize, new byte[]{
-                    (byte) Opcode.LDC_W, (byte) (cpIdx >> 8), (byte) cpIdx
+                (byte) Opcode.LDC_W, (byte) (cpIdx >> 8), (byte) cpIdx
             });
         }
     }
@@ -328,9 +362,7 @@ public class InjectionPoints {
                 if (wantOrdinal >= 0 && seen++ != wantOrdinal) continue;
                 rewriteNumericInstruction(it, cp, pos, op, loaded.type, newExpr);
             }
-        } catch (BadBytecode e) {
-            throw new CannotCompileException(e);
-        }
+        } catch (BadBytecode e) {throw new CannotCompileException(e);}
     }
 
     private enum NumType { FLOAT, DOUBLE, LONG }
@@ -360,9 +392,7 @@ public class InjectionPoints {
                 }
                 default -> null;
             };
-        } catch (Exception e) {
-            return null;
-        }
+        } catch (Exception e) {return null;}
     }
 
     private static NumericConstant numFromCp(ConstPool cp, int idx) {
@@ -394,33 +424,50 @@ public class InjectionPoints {
         switch (type) {
             case FLOAT -> {
                 float nv = parseFloat(newExpr);
-                if (nv == 0.0f) writeWithNops(it, pos, origSize, new byte[]{(byte) Opcode.FCONST_0});
-                else if (nv == 1.0f) writeWithNops(it, pos, origSize, new byte[]{(byte) Opcode.FCONST_1});
-                else if (nv == 2.0f) writeWithNops(it, pos, origSize, new byte[]{(byte) Opcode.FCONST_2});
+                if (nv == 0.0f) writeWithNops(it, pos, origSize, new byte[]{
+                    (byte) Opcode.FCONST_0
+                });
+                else if (nv == 1.0f) writeWithNops(it, pos, origSize, new byte[]{
+                    (byte) Opcode.FCONST_1
+                });
+                else if (nv == 2.0f) writeWithNops(it, pos, origSize, new byte[]{
+                    (byte) Opcode.FCONST_2
+                });
                 else {
                     int cpIdx = cp.addFloatInfo(nv);
                     writeWithNops(it, pos, origSize, new byte[]{
-                            (byte) Opcode.LDC_W, (byte) (cpIdx >> 8), (byte) cpIdx });
+                        (byte) Opcode.LDC_W, (byte) (cpIdx >> 8), (byte) cpIdx 
+                    });
                 }
             }
             case DOUBLE -> {
                 double nv = parseDouble(newExpr);
-                if (nv == 0.0) writeWithNops(it, pos, origSize, new byte[]{(byte) Opcode.DCONST_0});
-                else if (nv == 1.0) writeWithNops(it, pos, origSize, new byte[]{(byte) Opcode.DCONST_1});
+                if (nv == 0.0) writeWithNops(it, pos, origSize, new byte[]{
+                    (byte) Opcode.DCONST_0
+                });
+                else if (nv == 1.0) writeWithNops(it, pos, origSize, new byte[]{
+                    (byte) Opcode.DCONST_1
+                });
                 else {
                     int cpIdx = cp.addDoubleInfo(nv);
                     writeWithNops(it, pos, origSize, new byte[]{
-                            (byte) Opcode.LDC2_W, (byte) (cpIdx >> 8), (byte) cpIdx });
+                        (byte) Opcode.LDC2_W, (byte) (cpIdx >> 8), (byte) cpIdx
+                    });
                 }
             }
             case LONG -> {
                 long nv = parseLong(newExpr);
-                if (nv == 0L) writeWithNops(it, pos, origSize, new byte[]{(byte) Opcode.LCONST_0});
-                else if (nv == 1L) writeWithNops(it, pos, origSize, new byte[]{(byte) Opcode.LCONST_1});
+                if (nv == 0L) writeWithNops(it, pos, origSize, new byte[]{
+                    (byte) Opcode.LCONST_0
+                });
+                else if (nv == 1L) writeWithNops(it, pos, origSize, new byte[]{
+                    (byte) Opcode.LCONST_1
+                });
                 else {
                     int cpIdx = cp.addLongInfo(nv);
                     writeWithNops(it, pos, origSize, new byte[]{
-                            (byte) Opcode.LDC2_W, (byte) (cpIdx >> 8), (byte) cpIdx });
+                        (byte) Opcode.LDC2_W, (byte) (cpIdx >> 8), (byte) cpIdx
+                    });
                 }
             }
         }
@@ -448,7 +495,7 @@ public class InjectionPoints {
                 int newIdx = cp.addStringInfo(unquote(newLiteral));
                 int origSize = (op == Opcode.LDC) ? 2 : 3;
                 writeWithNops(it, pos, origSize, new byte[]{
-                        (byte) Opcode.LDC_W, (byte) (newIdx >> 8), (byte) newIdx
+                    (byte) Opcode.LDC_W, (byte) (newIdx >> 8), (byte) newIdx
                 });
             }
         } catch (BadBytecode e) {throw new CannotCompileException(e);}
