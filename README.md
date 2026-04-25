@@ -26,6 +26,10 @@ repositories {
         dir 'libs'
     }
 }
+// dependencies中写(将{versino}换成实际的版本号): 
+dependencies {
+    implementation fg.deobf("wertygh:jffl:{version}")
+}
 ```
 
 ---
