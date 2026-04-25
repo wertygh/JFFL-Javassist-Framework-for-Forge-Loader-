@@ -1,8 +1,14 @@
 package net.wertygh.jffl.registry;
 
 import net.wertygh.jffl.api.IClassPatch;
+import net.wertygh.jffl.api.ITransformerPlugin;
 import net.wertygh.jffl.api.annotation.Patch;
-import org.objectweb.asm.*;
+import net.wertygh.jffl.api.annotation.PatchDependency;
+import org.objectweb.asm.AnnotationVisitor;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,37 +17,170 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.ArrayDeque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Scanner;
+import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class PatchRegistry {
     private static final Logger LOGGER = LoggerFactory.getLogger(PatchRegistry.class);
+    private static final String SERVICE_FILE = "META-INF/services/net.wertygh.jffl.api.IClassPatch";
+    private static final String PLUGIN_PREFIX = "Plugin:";
     private final Map<String, List<PatchEntry>> patchIndex = new HashMap<>();
     private final List<PatchEntry> allPatches = new ArrayList<>();
+    private final List<TransformerPluginEntry> transformerPlugins = new ArrayList<>();
     private final Set<String> mixinTargets = new LinkedHashSet<>();
     private final List<URLClassLoader> patchClassLoaders = new ArrayList<>();
-
-    public record PatchEntry(String targetClass, int priority, IClassPatch patch) implements Comparable<PatchEntry> {
+    private long nextRegistrationOrder = 0L;
+    private long nextPluginRegistrationOrder = 0L;
+    // 我可从来没用过record
+    public record PatchEntry(String targetClass, int priority, IClassPatch patch, String sourceId, String patchClassName, long registrationOrder, List<String> dependencies, List<String> optionalDependencies) implements Comparable<PatchEntry> {
         @Override
         public int compareTo(PatchEntry o) {
-            return Integer.compare(this.priority, o.priority);
+            int byPriority = Integer.compare(this.priority, o.priority);
+            if (byPriority != 0) return byPriority;
+            int bySource = this.sourceId.compareTo(o.sourceId);
+            if (bySource != 0) return bySource;
+            int byPatchClass = this.patchClassName.compareTo(o.patchClassName);
+            if (byPatchClass != 0) return byPatchClass;
+            return Long.compare(this.registrationOrder, o.registrationOrder);
+        }
+
+        public String displayName() {
+            return patchClassName + " [" + sourceId + "]";
+        }
+    }
+
+    public record TransformerPluginEntry(ITransformerPlugin plugin, String sourceId, String pluginClassName, long registrationOrder, Set<String> targetClasses) {
+        public String displayName() {
+            return pluginClassName + " [" + sourceId + "]";
         }
     }
 
     public void register(IClassPatch patch) {
-        Class<?> clazz = patch.getClass();
-        Patch ann = clazz.getAnnotation(Patch.class);
-        String target = ann.value();
-        PatchEntry entry = new PatchEntry(target, ann.priority(), patch);
-        allPatches.add(entry);
-        patchIndex.computeIfAbsent(target, k -> new ArrayList<>()).add(entry);
-        patchIndex.get(target).sort(Comparator.naturalOrder());
-        LOGGER.info("为目标{}注册了补丁{}(优先级{})", clazz.getSimpleName(), target, ann.priority());
+        register(patch, "runtime:" + patch.getClass().getName());
     }
-    
+
+    public void registerPlugin(ITransformerPlugin plugin) {
+        registerPlugin(plugin, "runtime:" + plugin.getClass().getName());
+    }
+
+    public void registerPlugin(ITransformerPlugin plugin, String sourceId) {
+        if (plugin == null) return;
+        Class<?> clazz = plugin.getClass();
+        String normalizedSourceId = sourceId == null ? "unknown" : sourceId;
+        Set<String> targets = new LinkedHashSet<>();
+        try {
+            Set<String> declaredTargets = plugin.targetClasses();
+            if (declaredTargets != null) {
+                for (String target : declaredTargets) {
+                    if (target != null && !target.isBlank()) targets.add(target.trim().replace('/', '.'));
+                }
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("读取插件{}的targetClasses()失败", clazz.getName(), t);
+        }
+        int providedPatchCount = registerPluginPatches(plugin, normalizedSourceId, clazz);
+        TransformerPluginEntry entry = new TransformerPluginEntry(
+                plugin, normalizedSourceId, clazz.getName(),
+                nextPluginRegistrationOrder++, Collections.unmodifiableSet(targets));
+        transformerPlugins.add(entry);
+        LOGGER.info("注册JavassistTransformer插件{}(补丁{}个)", clazz.getSimpleName(), providedPatchCount);
+    }
+
+    private int registerPluginPatches(ITransformerPlugin plugin, String sourceId, Class<?> pluginClass) {
+        String pluginPatchSourceId = sourceId + "#Plugin:" + pluginClass.getName();
+        int count = 0;
+        try {
+            Iterable<Class<? extends IClassPatch>> patchClasses = plugin.patchClasses();
+            if (patchClasses != null) {
+                for (Class<? extends IClassPatch> patchClass : patchClasses) {
+                    if (patchClass == null) continue;
+                    try {
+                        IClassPatch patch = patchClass.getDeclaredConstructor().newInstance();
+                        register(patch, pluginPatchSourceId);
+                        count++;
+                    } catch (Throwable t) {
+                        LOGGER.error("插件{}提供的补丁类{}实例化失败", pluginClass.getName(), patchClass.getName(), t);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("读取插件{}的patchClasses()失败", pluginClass.getName(), t);
+        }
+        try {
+            Iterable<? extends IClassPatch> patches = plugin.patches();
+            if (patches != null) {
+                for (IClassPatch patch : patches) {
+                    if (patch == null) continue;
+                    register(patch, pluginPatchSourceId);
+                    count++;
+                }
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("读取插件{}的patches()失败", pluginClass.getName(), t);
+        }
+        return count;
+    }
+
+    public void register(IClassPatch patch, String sourceId) {
+        Class<?> clazz = patch.getClass();
+        Patch[] anns = clazz.getAnnotationsByType(Patch.class);
+        if (anns.length == 0) {
+            LOGGER.error("补丁类{}没有@Patch注解, 无法注册", clazz.getName());
+            return;
+        }
+        for (Patch ann : anns) {
+            String target = ann.value();
+            if (target == null || target.isEmpty()) {
+                LOGGER.warn("补丁{}的@Patch.value()为空", clazz.getName());
+                continue;
+            }
+            PatchEntry entry = new PatchEntry(
+                target, ann.priority(), patch,
+                sourceId == null ? "unknown" : sourceId,
+                clazz.getName(), nextRegistrationOrder++,
+                collectRequiredDependencies(clazz, ann),
+                collectOptionalDependencies(clazz)
+            );
+            allPatches.add(entry);
+            List<PatchEntry> list = patchIndex.computeIfAbsent(target, k -> new ArrayList<>());
+            list.add(entry);
+            list.sort(Comparator.naturalOrder());
+            LOGGER.info("为目标{}注册了补丁{}(优先级{}, 来源={})",
+                    target, clazz.getSimpleName(), ann.priority(), entry.sourceId());
+        }
+    }
+
+    private static List<String> collectRequiredDependencies(Class<?> clazz, Patch patch) {
+        LinkedHashSet<String> deps = new LinkedHashSet<>();
+        for (String dep : patch.dependsOn()) {
+            if (dep != null && !dep.isBlank()) deps.add(dep.trim());
+        }
+        for (PatchDependency dep : clazz.getAnnotationsByType(PatchDependency.class)) {
+            if (!dep.optional() && dep.value() != null && !dep.value().isBlank()) deps.add(dep.value().trim());
+        }
+        return List.copyOf(deps);
+    }
+
+    private static List<String> collectOptionalDependencies(Class<?> clazz) {
+        LinkedHashSet<String> deps = new LinkedHashSet<>();
+        for (PatchDependency dep : clazz.getAnnotationsByType(PatchDependency.class)) {
+            if (dep.optional() && dep.value() != null && !dep.value().isBlank()) deps.add(dep.value().trim());
+        }
+        return List.copyOf(deps);
+    }
+
     public void detectMixinTargets(File modsDir) {
         if (!modsDir.exists() || !modsDir.isDirectory()) return;
         File[] jars = modsDir.listFiles((d, n) -> n.endsWith(".jar"));
@@ -74,7 +213,7 @@ public class PatchRegistry {
                     try (var is = jf.getInputStream(classEntry)) {
                         extractMixinTargetsFromClass(is.readAllBytes());
                     } catch (Exception e) {
-                        LOGGER.debug("无法从{}读取Mixin类{}：{}", 
+                        LOGGER.debug("无法从{}读取Mixin类{}：{}",
                                 mixinClassName, jar.getName(), e.getMessage());
                     }
                 }
@@ -83,7 +222,7 @@ public class PatchRegistry {
             }
         }
     }
-    
+
     private void collectMixinClassNames(String json, Set<String> out) {
         String pkg = extractJsonString(json, "package");
         if (pkg == null) return;
@@ -94,7 +233,7 @@ public class PatchRegistry {
             }
         }
     }
-    
+
     private void extractMixinTargetsFromClass(byte[] classBytes) {
         ClassReader cr = new ClassReader(classBytes);
         cr.accept(new ClassVisitor(Opcodes.ASM9) {
@@ -125,6 +264,7 @@ public class PatchRegistry {
                             }
                             return super.visitArray(name);
                         }
+
                         @Override
                         public void visit(String name, Object value) {
                             if ("value".equals(name) && value instanceof Type t) {
@@ -197,26 +337,30 @@ public class PatchRegistry {
         }
         detectMixinTargets(modsDir);
         File[] jars = modsDir.listFiles((d, n) -> n.endsWith(".jar"));
-        if (jars == null) return;
+        if (jars == null || jars.length == 0) return;
+        URLClassLoader loader = buildPatchClassLoader(List.of(jars));
+        patchClassLoaders.add(loader);
         for (File jar : jars) {
-            scanJar(jar);
+            scanJar(jar, loader);
         }
     }
 
     private void scanJar(File jarFile) {
+        URLClassLoader loader = buildPatchClassLoader(List.of(jarFile));
+        patchClassLoaders.add(loader);
+        scanJar(jarFile, loader);
+    }
+
+    private void scanJar(File jarFile, ClassLoader loader) {
         try (JarFile jar = new JarFile(jarFile)) {
             String patchList = null;
             if (jar.getManifest() != null) {
                 patchList = jar.getManifest().getMainAttributes().getValue("JFFL-Patches");
             }
-            JarEntry serviceEntry = jar.getJarEntry("META-INF/services/net.wertygh.jffl.api.IClassPatch");
+            JarEntry serviceEntry = jar.getJarEntry(SERVICE_FILE);
             if (patchList == null && serviceEntry == null) return;
-            URLClassLoader loader = new URLClassLoader(
-                    new URL[]{jarFile.toURI().toURL()},
-                    PatchRegistry.class.getClassLoader()
-            );
-            try {
-                Set<String> classNames = new LinkedHashSet<>();
+            Set<String> classNames = new LinkedHashSet<>();
+            Set<String> pluginClassNames = new LinkedHashSet<>();
                 if (patchList != null) {
                     for (String name : patchList.split(",")) {
                         String trimmed = name.trim();
@@ -225,11 +369,20 @@ public class PatchRegistry {
                 }
                 if (serviceEntry != null) {
                     try (var is = jar.getInputStream(serviceEntry);
-                         var scanner = new java.util.Scanner(is)) {
+                         var scanner = new Scanner(is)) {
                         String currentPrefix = null;
                         while (scanner.hasNextLine()) {
                             String line = scanner.nextLine().trim();
                             if (line.isEmpty() || line.startsWith("#")) continue;
+                            if (line.startsWith(PLUGIN_PREFIX)) {
+                                String pluginName = resolveServiceClassName(line.substring(PLUGIN_PREFIX.length()).trim(), currentPrefix);
+                                if (isFullyQualifiedClassName(pluginName)) {
+                                    pluginClassNames.add(pluginName);
+                                } else {
+                                    LOGGER.warn("无效插件声明'{}', \"Plugin:\"后必须是全限定名", line);
+                                }
+                                continue;
+                            }
                             if (line.endsWith("#")) {
                                 currentPrefix = line.substring(0, line.length() - 1);
                                 if (!currentPrefix.endsWith(".")) currentPrefix += ".";
@@ -249,33 +402,17 @@ public class PatchRegistry {
                         }
                     }
                 }
-                for (String className : classNames) {
-                    try {
-                        Class<?> patchClass = loader.loadClass(className);
-                        if (!IClassPatch.class.isAssignableFrom(patchClass)) {
-                            LOGGER.warn("在服务文件中声明的类'{}'未实现IClassPatch",className);
-                            continue;
-                        }
-                        if (!patchClass.isAnnotationPresent(Patch.class)) {
-                            LOGGER.warn("服务文件中声明的类'{}'缺少@Patch注解", className);
-                            continue;
-                        }
-                        IClassPatch patch = (IClassPatch) patchClass.getDeclaredConstructor().newInstance();
-                        register(patch);
-                    } catch (ClassNotFoundException e) {
-                        LOGGER.error("在{}中未找到补丁类'{}'", className, jarFile.getName());
-                    } catch (Exception e) {
-                        LOGGER.error("无法从{}加载补丁类{}",className, jarFile.getName(), e);
-                    }
-                }
-            } finally {
-                patchClassLoaders.add(loader);
+            for (String className : classNames) {
+                loadPatchClass(loader, className, jarFile.getAbsolutePath(), jarFile.getName(), true);
+            }
+            for (String pluginClassName : pluginClassNames) {
+                loadPluginClass(loader, pluginClassName, jarFile.getAbsolutePath(), jarFile.getName());
             }
         } catch (Exception e) {
             LOGGER.error("获取补丁类失败：{}", jarFile, e);
         }
     }
-    
+
     private Set<String> scanPackageInJar(JarFile jar, String packageName) {
         String pkgPath = packageName.replace('.', '/') + "/";
         Set<String> result = new LinkedHashSet<>();
@@ -286,7 +423,7 @@ public class PatchRegistry {
             if (name.startsWith(pkgPath) && name.endsWith(".class") && !entry.isDirectory()) {
                 String remainder = name.substring(pkgPath.length());
                 if (!remainder.contains("/")) {
-                    String className = name.substring(0,name.length()-6).replace('/','.');
+                    String className = name.substring(0, name.length() - 6).replace('/', '.');
                     result.add(className);
                 }
             }
@@ -303,52 +440,173 @@ public class PatchRegistry {
     }
 
     public List<PatchEntry> getPatches(String className) {
-        return patchIndex.getOrDefault(className, Collections.emptyList());
+        List<PatchEntry> list = patchIndex.getOrDefault(className, Collections.emptyList());
+        if (list.isEmpty()) return list;
+        return Collections.unmodifiableList(resolveDependencies(className, list));
+    }
+
+    private List<PatchEntry> resolveDependencies(String targetClass, List<PatchEntry> source) {
+        List<PatchEntry> candidates = new ArrayList<>();
+        for (PatchEntry entry : source) {
+            if (requiredDependenciesPresent(entry)) {
+                candidates.add(entry);
+            } else {
+                LOGGER.warn("补丁{}缺少必需依赖{}", entry.displayName(), entry.dependencies());
+            }
+        }
+        candidates.sort(Comparator.naturalOrder());
+        List<PatchEntry> ordered = new ArrayList<>(candidates.size());
+        Map<PatchEntry, VisitState> state = new HashMap<>();
+        for (PatchEntry entry : candidates) {
+            visitForDependencyOrder(targetClass, entry, candidates, state, ordered, new ArrayDeque<>());
+        }
+        return ordered;
+    }
+
+    private enum VisitState {VISITING,VISITED}
+
+    private boolean visitForDependencyOrder(String targetClass, PatchEntry entry, List<PatchEntry> candidates, Map<PatchEntry, VisitState> state, List<PatchEntry> ordered, ArrayDeque<PatchEntry> stack) {
+        VisitState current = state.get(entry);
+        if (current == VisitState.VISITED) return true;
+        if (current == VisitState.VISITING) {
+            LOGGER.warn("检测到{}上的补丁依赖循环: {}", targetClass, describeCycle(stack, entry));
+            return false;
+        }
+        state.put(entry, VisitState.VISITING);
+        stack.push(entry);
+        for (String dep : entry.dependencies()) {
+            PatchEntry dependency = findMatchingEntry(candidates, dep);
+            if (dependency != null) {
+                visitForDependencyOrder(targetClass, dependency, candidates, state, ordered, stack);
+            }
+        }
+        for (String dep : entry.optionalDependencies()) {
+            PatchEntry dependency = findMatchingEntry(candidates, dep);
+            if (dependency != null) {
+                visitForDependencyOrder(targetClass, dependency, candidates, state, ordered, stack);
+            }
+        }
+        stack.pop();
+        state.put(entry, VisitState.VISITED);
+        if (!ordered.contains(entry)) ordered.add(entry);
+        return true;
+    }
+
+    private boolean requiredDependenciesPresent(PatchEntry entry) {
+        for (String dep : entry.dependencies()) {
+            if (findMatchingEntry(allPatches, dep) == null) return false;
+        }
+        return true;
+    }
+
+    private static PatchEntry findMatchingEntry(List<PatchEntry> entries, String dependency) {
+        if (dependency == null || dependency.isBlank()) return null;
+        for (PatchEntry candidate : entries) {
+            if (matchesDependency(candidate, dependency.trim())) return candidate;
+        }
+        return null;
+    }
+
+    private static boolean matchesDependency(PatchEntry entry, String dependency) {
+        if (dependency.equals(entry.patchClassName())) return true;
+        int lastDot = entry.patchClassName().lastIndexOf('.');
+        String simpleName = lastDot >= 0 ? entry.patchClassName().substring(lastDot + 1) : entry.patchClassName();
+        if (dependency.equals(simpleName)) return true;
+        if (dependency.equals(entry.sourceId())) return true;
+        if (dependency.equals(entry.sourceId() + ":" + entry.patchClassName())) return true;
+        if (dependency.equals(entry.sourceId() + "#" + entry.patchClassName())) return true;
+        if (dependency.equals(entry.sourceId() + ":" + simpleName)) return true;
+        if (dependency.equals(entry.sourceId() + "#" + simpleName)) return true;
+        return false;
+    }
+
+    private static String describeCycle(ArrayDeque<PatchEntry> stack, PatchEntry repeated) {
+        StringBuilder sb = new StringBuilder(repeated.patchClassName());
+        for (PatchEntry entry : stack) {
+            sb.append(" <- ").append(entry.patchClassName());
+        }
+        return sb.toString();
     }
 
     public Set<String> getMixinTargets() {
         return Collections.unmodifiableSet(mixinTargets);
     }
 
+    public List<TransformerPluginEntry> getTransformerPlugins() {
+        return Collections.unmodifiableList(transformerPlugins);
+    }
+
+    public boolean hasTransformerPlugins() {
+        return !transformerPlugins.isEmpty();
+    }
+
+    public Set<String> getTransformerTargetClasses() {
+        LinkedHashSet<String> targets = new LinkedHashSet<>(patchIndex.keySet());
+        for (TransformerPluginEntry entry : transformerPlugins) {
+            targets.addAll(entry.targetClasses());
+        }
+        return Collections.unmodifiableSet(targets);
+    }
+
     public void scanClassPath(String classpath) {
         if (classpath == null || classpath.isBlank()) return;
+        List<File> entries = new ArrayList<>();
         for (String entry : classpath.split(File.pathSeparator)) {
             if (entry.isBlank()) continue;
             File f = new File(entry);
-            if (!f.exists()) continue;
+            if (f.exists() && (f.isDirectory() || entry.endsWith(".jar"))) entries.add(f);
+        }
+        if (entries.isEmpty()) return;
+        URLClassLoader loader = buildPatchClassLoader(entries);
+        patchClassLoaders.add(loader);
+        for (File f : entries) {
             if (f.isDirectory()) {
-                scanDirectoryEntry(f);
-            } else if (entry.endsWith(".jar")) {
-                scanJar(f);
+                scanDirectoryEntry(f, loader);
+            } else if (f.getName().endsWith(".jar")) {
+                scanJar(f, loader);
             }
         }
     }
-    
+
     public void scanModClasses(String modClasses) {
         if (modClasses == null || modClasses.isBlank()) return;
         Set<String> seen = new LinkedHashSet<>();
+        List<File> entries = new ArrayList<>();
         for (String entry : modClasses.split(File.pathSeparator)) {
             if (entry.isBlank()) continue;
             int sep = entry.indexOf("%%");
             String path = sep >= 0 ? entry.substring(sep + 2) : entry;
             if (!path.isBlank() && seen.add(path)) {
                 File f = new File(path);
-                if (f.isDirectory()) {
-                    scanDirectoryEntry(f);
-                } else if (f.isFile() && path.endsWith(".jar")) {
-                    scanJar(f);
-                }
+                if (f.exists() && (f.isDirectory() || (f.isFile() && path.endsWith(".jar")))) entries.add(f);
+            }
+        }
+        if (entries.isEmpty()) return;
+        URLClassLoader loader = buildPatchClassLoader(entries);
+        patchClassLoaders.add(loader);
+        for (File f : entries) {
+            if (f.isDirectory()) {
+                scanDirectoryEntry(f, loader);
+            } else if (f.isFile() && f.getName().endsWith(".jar")) {
+                scanJar(f, loader);
             }
         }
     }
-    
+
     private void scanDirectoryEntry(File dir) {
-        File serviceFile = new File(dir, "META-INF/services/net.wertygh.jffl.api.IClassPatch");
+        URLClassLoader loader = buildPatchClassLoader(List.of(dir));
+        patchClassLoaders.add(loader);
+        scanDirectoryEntry(dir, loader);
+    }
+
+    private void scanDirectoryEntry(File dir, ClassLoader loader) {
+        File serviceFile = new File(dir, SERVICE_FILE);
         File manifestFile = new File(dir, "META-INF/MANIFEST.MF");
         if (!serviceFile.isFile() && !manifestFile.isFile()) return;
         Set<String> classNames = new LinkedHashSet<>();
+        Set<String> pluginClassNames = new LinkedHashSet<>();
         if (manifestFile.isFile()) {
-            try (var is = java.nio.file.Files.newInputStream(manifestFile.toPath())) {
+            try (var is = Files.newInputStream(manifestFile.toPath())) {
                 java.util.jar.Manifest mf = new java.util.jar.Manifest(is);
                 String list = mf.getMainAttributes().getValue("JFFL-Patches");
                 if (list != null) {
@@ -367,6 +625,15 @@ public class PatchRegistry {
                 while (scanner.hasNextLine()) {
                     String line = scanner.nextLine().trim();
                     if (line.isEmpty() || line.startsWith("#")) continue;
+                    if (line.startsWith(PLUGIN_PREFIX)) {
+                        String pluginName = resolveServiceClassName(line.substring(PLUGIN_PREFIX.length()).trim(), currentPrefix);
+                        if (isFullyQualifiedClassName(pluginName)) {
+                            pluginClassNames.add(pluginName);
+                        } else {
+                            LOGGER.warn("无效插件声明'{}', \"Plugin:\"后必须是全限定名", line);
+                        }
+                        continue;
+                    }
                     if (line.endsWith("#")) {
                         currentPrefix = line.substring(0, line.length() - 1);
                         if (!currentPrefix.endsWith(".")) currentPrefix += ".";
@@ -387,36 +654,79 @@ public class PatchRegistry {
                 LOGGER.debug("读取目录{}的服务文件失败", dir, e);
             }
         }
-        if (classNames.isEmpty()) return;
-        URLClassLoader loader;
-        try {
-            loader = new URLClassLoader(new URL[]{dir.toURI().toURL()}, PatchRegistry.class.getClassLoader());
-        } catch (Exception e) {
-            LOGGER.error("无法为补丁目录{}构建URLClassLoader", dir, e);
-            return;
-        }
+        if (classNames.isEmpty() && pluginClassNames.isEmpty()) return;
         for (String className : classNames) {
-            try {
-                Class<?> patchClass = loader.loadClass(className);
-                if (!IClassPatch.class.isAssignableFrom(patchClass)) {
-                    LOGGER.warn("类'{}'未实现IClassPatch, 目录: {}", className, dir);
-                    continue;
-                }
-                if (!patchClass.isAnnotationPresent(Patch.class)) {
-                    LOGGER.warn("类'{}'缺少@Patch注解, 目录: {}", className, dir);
-                    continue;
-                }
-                IClassPatch patch = (IClassPatch) patchClass.getDeclaredConstructor().newInstance();
-                register(patch);
-            } catch (ClassNotFoundException e) {
-                LOGGER.debug("在目录{}中未找到声明的补丁类'{}'", dir, className);
-            } catch (Exception e) {
-                LOGGER.error("从目录{}加载补丁类{}失败", dir, className, e);
-            }
+            loadPatchClass(loader, className, dir.getAbsolutePath(), dir.toString(), false);
         }
-        patchClassLoaders.add(loader);
+        for (String pluginClassName : pluginClassNames) {
+            loadPluginClass(loader, pluginClassName, dir.getAbsolutePath(), dir.toString());
+        }
     }
-    
+
+    private void loadPatchClass(ClassLoader loader, String className, String sourceId, String sourceName, boolean errorOnMissing) {
+        try {
+            Class<?> patchClass = loader.loadClass(className);
+            if (!IClassPatch.class.isAssignableFrom(patchClass)) {
+                LOGGER.warn("类'{}'未实现IClassPatch, 来自: {}", className, sourceName);
+                return;
+            }
+            if (patchClass.getAnnotationsByType(Patch.class).length == 0) {
+                LOGGER.warn("类'{}'缺少@Patch注解, 来自: {}", className, sourceName);
+                return;
+            }
+            IClassPatch patch = (IClassPatch) patchClass.getDeclaredConstructor().newInstance();
+            register(patch, sourceId);
+        } catch (ClassNotFoundException e) {
+            if (errorOnMissing) LOGGER.error("在{}中未找到补丁类'{}'", sourceName, className);
+            else LOGGER.debug("在{}中未找到声明的补丁类'{}'", sourceName, className);
+        } catch (Exception e) {
+            LOGGER.error("从{}加载补丁类{}失败", sourceName, className, e);
+        }
+    }
+
+    private void loadPluginClass(ClassLoader loader, String className, String sourceId, String sourceName) {
+        try {
+            Class<?> pluginClass = loader.loadClass(className);
+            if (!ITransformerPlugin.class.isAssignableFrom(pluginClass)) {
+                LOGGER.warn("Plugin声明的类'{}'未实现ITransformerPlugin, 来自: {}", className, sourceName);
+                return;
+            }
+            ITransformerPlugin plugin = (ITransformerPlugin) pluginClass.getDeclaredConstructor().newInstance();
+            registerPlugin(plugin, sourceId);
+        } catch (ClassNotFoundException e) {
+            LOGGER.error("在{}中未找到插件类'{}'", sourceName, className);
+        } catch (Exception e) {
+            LOGGER.error("从{}加载插件类{}失败", sourceName, className, e);
+        }
+    }
+
+    private static String resolveServiceClassName(String name, String currentPrefix) {
+        if (name == null) return "";
+        String trimmed = name.trim();
+        if (trimmed.isEmpty()) return trimmed;
+        if (currentPrefix != null && !trimmed.contains(".")) return currentPrefix + trimmed;
+        return trimmed;
+    }
+
+    private static boolean isFullyQualifiedClassName(String className) {
+        if (className == null || className.isBlank() || !className.contains(".")) return false;
+        String ident = "[A-Za-z_$][A-Za-z0-9_$]*";
+        return className.matches(ident + "(\\." + ident + ")+" );
+    }
+
+    private URLClassLoader buildPatchClassLoader(List<File> entries) {
+        try {
+            URL[] urls = new URL[entries.size()];
+            for (int i = 0; i < entries.size(); i++) {
+                urls[i] = entries.get(i).toURI().toURL();
+            }
+            return new URLClassLoader(urls, PatchRegistry.class.getClassLoader());
+        } catch (Exception e) {
+            LOGGER.error("无法构建补丁URLClassLoader", e);
+            return new URLClassLoader(new URL[0], PatchRegistry.class.getClassLoader());
+        }
+    }
+
     private Set<String> scanPackageInDir(File root, String packageName) {
         Path pkgDir = root.toPath().resolve(packageName.replace('.', '/'));
         if (!Files.isDirectory(pkgDir)) return Set.of();
