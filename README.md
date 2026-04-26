@@ -59,7 +59,3 @@ BSD Zero Clause License
 
 欢迎提交 Issue 和 Pull Request！
 项目作者：wertygh
-
----
-
-本模组非常重视安全性，绝不会偷走你的钱包——请到kubejs/jffljs_script/下检查本模组的脚本
