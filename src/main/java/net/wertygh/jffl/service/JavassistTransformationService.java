@@ -81,9 +81,6 @@ public class JavassistTransformationService implements ITransformationService {
     public @NotNull List<ITransformer> transformers() {
         Set<String> targets = registry.getTransformerTargetClasses();
         List<ITransformer> out = new ArrayList<>();
-        if (DevEnvironment.isProduction()) {
-            out.add(new JavassistRemapperTransformer());
-        }
         if (!targets.isEmpty()) {
             out.add(new JavassistTransformer(targets, engine, registry.getTransformerPlugins()));
         } else if (registry.hasTransformerPlugins()) {
