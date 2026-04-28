@@ -13,9 +13,51 @@ base {
     archivesName = mod_id
 }
 
+task patchJavassist {
+    dependsOn compileJava
+    def patchedDir = layout.buildDirectory.dir("patchedJavassist").get().asFile
+    def patchedJar = new File(patchedDir, "javassist-patched.jar")
+    outputs.file patchedJar
+    doLast {
+        def javassistFiles = configurations.shade.fileCollection { it.name.contains('javassist') }
+        if (javassistFiles.empty) {
+            throw new GradleException("javassist jar not found in 'shade' configuration")
+        }
+        def original = javassistFiles.singleFile
+        patchedDir.mkdirs()
+        def classLoader = sourceSets.main.runtimeClasspath
+                .plus(configurations.javassistPatcher)
+                .collect { it.toURI().toURL() } as URL[]
+        def cl = new URLClassLoader(classLoader, ClassLoader.getSystemClassLoader())
+        def patcherClass = cl.loadClass('net.wertygh.jffl.build.JavassistPatcher')
+        def patchMethod = patcherClass.getMethod('patchJavassistClass', String.class, byte[].class)
+        def originalJar = new java.util.jar.JarFile(original)
+        def jos = new java.util.jar.JarOutputStream(new FileOutputStream(patchedJar))
+        originalJar.entries().each { entry ->
+            if (entry.directory) return
+            def name = entry.name
+            def bytes = originalJar.getInputStream(entry).readAllBytes()
+            if (name.endsWith('.class') &&
+                (name.startsWith('javassist/compiler/') || name.startsWith('javassist/CtClassType'))) {
+                def className = name.replace('/','.').replaceAll('\\.class$','')
+                bytes = patchMethod.invoke(null, className, bytes)
+            }
+            def newEntry = new java.util.jar.JarEntry(name)
+            newEntry.time = entry.time
+            jos.putNextEntry(newEntry)
+            jos.write(bytes)
+            jos.closeEntry()
+        }
+        jos.close()
+        originalJar.close()
+        logger.lifecycle("生成修补后的 javassist: ${patchedJar.absolutePath}")
+    }
+}
+
 configurations {
     shade
     implementation.extendsFrom shade
+    javassistPatcher
 }
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
@@ -62,16 +104,29 @@ dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
     shade 'org.javassist:javassist:3.30.2-GA'
     implementation 'org.javassist:javassist:3.30.2-GA'
+    
+    javassistPatcher 'org.ow2.asm:asm:9.6'
+    javassistPatcher 'org.ow2.asm:asm-tree:9.6'
+    javassistPatcher 'org.ow2.asm:asm-commons:9.6'
+    javassistPatcher 'org.ow2.asm:asm-util:9.6'
 }
 
 shadowJar {
     configurations = [project.configurations.shade]
+    dependencies {
+        exclude(dependency('org.javassist:javassist:.*'))
+    }
+    from tasks.patchJavassist.outputs.files
     archiveClassifier.set('shaded')
     mergeServiceFiles()
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest {
         attributes 'Main-Class': 'net.wertygh.jffl.JFFL'
     }
+}
+
+tasks.named('shadowJar') {
+    dependsOn patchJavassist
 }
 
 tasks.named('jar', Jar).configure {
