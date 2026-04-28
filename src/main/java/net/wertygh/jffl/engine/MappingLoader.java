@@ -52,7 +52,7 @@ public class MappingLoader {
             int indent = countLeadingSpaces(line);
             String content = line.trim();
             if (content.isEmpty()) continue;
-
+    
             if (content.startsWith("C ")) {
                 String className = content.substring(2).trim();
                 stack.clear();
@@ -85,7 +85,8 @@ public class MappingLoader {
                     continue;
                 }
                 String classPath = stack.peek().classPath;
-                addFieldMappingInternal(classPath, obfName, officialName);
+                String owner = classPath.replace('/', '.');
+                addFieldMappingInternal(owner, obfName, officialName);
                 fields++;
                 continue;
             }
@@ -107,12 +108,13 @@ public class MappingLoader {
                     continue;
                 }
                 String classPath = stack.peek().classPath;
-                addMethodMappingInternal(classPath, obfName, officialName, descriptor);
+                String owner = classPath.replace('/', '.');
+                addMethodMappingInternal(owner, obfName, officialName, descriptor);
                 methods++;
                 continue;
             }
         }
-
+    
         fieldCount += fields;
         methodCount += methods;
         loaded = true;
@@ -121,8 +123,8 @@ public class MappingLoader {
 
     private static void addFieldMappingInternal(String owner, String obfName, String officialName) {
         try {
-            String key = owner + "." + obfName;
-            addFieldMapping.invoke(null, key, officialName);
+            String mcpKey = owner + "." + officialName;
+            addFieldMapping.invoke(null, mcpKey, obfName);
         } catch (Exception e) {
             LOGGER.warn("无法添加字段映射{}.{} -> {}", owner, obfName, officialName, e);
         }
@@ -130,12 +132,12 @@ public class MappingLoader {
 
     private static void addMethodMappingInternal(String owner, String obfName, String officialName, String descriptor) {
         try {
-            String simpleKey = owner + "." + obfName;
-            addMethodMapping.invoke(null, simpleKey, officialName);
+            String mcpSimpleKey = owner + "." + officialName;
+            addMethodMapping.invoke(null, mcpSimpleKey, obfName);
             int argCount = countDescriptorArgs(descriptor);
             if (argCount >= 0) {
-                String overloadKey = owner + "." + obfName + "#" + argCount;
-                addMethodDescMapping.invoke(null, overloadKey, officialName);
+                String mcpOverloadKey = owner + "." + officialName + "#" + argCount;
+                addMethodDescMapping.invoke(null, mcpOverloadKey, obfName);
             }
         } catch (Exception e) {
             LOGGER.warn("无法添加方法映射{}.{} -> {}", owner, obfName, officialName, e);
@@ -287,15 +289,15 @@ public class MappingLoader {
         String mappedName = mappedFull.substring(mappedSlash + 1);
         if (srgName.equals(mappedName)) return false;
         try {
-            String key = owner + "." + srgName;
-            addFieldMapping.invoke(null, key, mappedName);
+            String mcpKey = owner + "." + mappedName;
+            addFieldMapping.invoke(null, mcpKey, srgName);
             return true;
         } catch (Exception e) {
             LOGGER.warn("注册字段映射失败: {}", line, e);
             return false;
         }
     }
-    
+
     private static boolean parseMethodLine(String line) {
         String[] parts = line.substring(4).trim().split("\\s+");
         if (parts.length < 4) {
@@ -316,12 +318,13 @@ public class MappingLoader {
         String mappedName = mappedFull.substring(mappedSlash + 1);
         if (srgName.equals(mappedName)) return false;
         try {
-            String simpleKey = owner + "." + srgName;
-            addMethodMapping.invoke(null, simpleKey, mappedName);
+            String mcpSimpleKey = owner + "." + mappedName;
+            addMethodMapping.invoke(null, mcpSimpleKey, srgName);
+        
             int argCount = countDescriptorArgs(srgDesc);
             if (argCount >= 0) {
-                String overloadKey = owner + "." + srgName + "#" + argCount;
-                addMethodDescMapping.invoke(null, overloadKey, mappedName);
+                String mcpOverloadKey = owner + "." + mappedName + "#" + argCount;
+                addMethodDescMapping.invoke(null, mcpOverloadKey, srgName);
             }
             return true;
         } catch (Exception e) {
