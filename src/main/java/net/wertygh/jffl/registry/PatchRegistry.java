@@ -34,7 +34,7 @@ import java.util.stream.Stream;
 
 public class PatchRegistry {
     private static final Logger LOGGER = LoggerFactory.getLogger(PatchRegistry.class);
-    private static final String SERVICE_FILE = "META-INF/services/net.wertygh.jffl.api.IClassPatch";
+    private static final String SERVICE_FILE = "META-INF/JFFL/IClassPatch.txt";
     private static final String PLUGIN_PREFIX = "Plugin:";
     private final Map<String, List<PatchEntry>> patchIndex = new HashMap<>();
     private final List<PatchEntry> allPatches = new ArrayList<>();
