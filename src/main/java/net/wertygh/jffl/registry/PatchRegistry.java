@@ -33,18 +33,35 @@ import java.util.jar.JarFile;
 import java.util.stream.Stream;
 
 public class PatchRegistry {
-    private static final Logger LOGGER = LoggerFactory.getLogger(PatchRegistry.class);
-    private static final String SERVICE_FILE = "META-INF/JFFL/IClassPatch.txt";
-    private static final String PLUGIN_PREFIX = "Plugin:";
-    private final Map<String, List<PatchEntry>> patchIndex = new HashMap<>();
-    private final List<PatchEntry> allPatches = new ArrayList<>();
-    private final List<TransformerPluginEntry> transformerPlugins = new ArrayList<>();
-    private final Set<String> mixinTargets = new LinkedHashSet<>();
-    private final List<URLClassLoader> patchClassLoaders = new ArrayList<>();
-    private long nextRegistrationOrder = 0L;
-    private long nextPluginRegistrationOrder = 0L;
-    // 我可从来没用过record
-    public record PatchEntry(String targetClass, int priority, IClassPatch patch, String sourceId, String patchClassName, long registrationOrder, List<String> dependencies, List<String> optionalDependencies) implements Comparable<PatchEntry> {
+    private static Logger LOGGER = LoggerFactory.getLogger(PatchRegistry.class);
+    public Map<String, List<PatchEntry>> patchIndex = new HashMap<>();
+    public List<PatchEntry> allPatches = new ArrayList<>();
+    public List<TransformerPluginEntry> transformerPlugins = new ArrayList<>();
+    public Set<String> mixinTargets = new LinkedHashSet<>();
+    public List<URLClassLoader> patchClassLoaders = new ArrayList<>();
+    public long nextRegistrationOrder = 0L;
+    public long nextPluginRegistrationOrder = 0L;
+    public static class PatchEntry implements Comparable<PatchEntry> {
+        public String targetClass;
+        public int priority;
+        public IClassPatch patch;
+        public String sourceId;
+        public String patchClassName;
+        public long registrationOrder;
+        public List<String> dependencies;
+        public List<String> optionalDependencies;
+
+        public PatchEntry(String targetClass, int priority, IClassPatch patch, String sourceId, String patchClassName, long registrationOrder, List<String> dependencies, List<String> optionalDependencies) {
+            this.targetClass = targetClass;
+            this.priority = priority;
+            this.patch = patch;
+            this.sourceId = sourceId;
+            this.patchClassName = patchClassName;
+            this.registrationOrder = registrationOrder;
+            this.dependencies = dependencies;
+            this.optionalDependencies = optionalDependencies;
+        }
+
         @Override
         public int compareTo(PatchEntry o) {
             int byPriority = Integer.compare(this.priority, o.priority);
@@ -61,7 +78,23 @@ public class PatchRegistry {
         }
     }
 
-    public record TransformerPluginEntry(ITransformerPlugin plugin, String sourceId, String pluginClassName, long registrationOrder, Set<String> targetClasses) {
+    public static class TransformerPluginEntry {
+        public ITransformerPlugin plugin;
+        public String sourceId;
+        public String pluginClassName;
+        public long registrationOrder;
+        public Set<String> targetClasses;
+        public Set<String> additionalClassPrefixes;
+
+        public TransformerPluginEntry(ITransformerPlugin plugin, String sourceId, String pluginClassName, long registrationOrder, Set<String> targetClasses, Set<String> additionalClassPrefixes) {
+            this.plugin = plugin;
+            this.sourceId = sourceId;
+            this.pluginClassName = pluginClassName;
+            this.registrationOrder = registrationOrder;
+            this.targetClasses = targetClasses;
+            this.additionalClassPrefixes = additionalClassPrefixes;
+        }
+
         public String displayName() {
             return pluginClassName + " [" + sourceId + "]";
         }
@@ -90,12 +123,53 @@ public class PatchRegistry {
         } catch (Throwable t) {
             LOGGER.warn("读取插件{}的targetClasses()失败", clazz.getName(), t);
         }
+        Set<String> additionalClassPrefixes = collectAdditionalClassPrefixes(plugin, clazz);
         int providedPatchCount = registerPluginPatches(plugin, normalizedSourceId, clazz);
         TransformerPluginEntry entry = new TransformerPluginEntry(
                 plugin, normalizedSourceId, clazz.getName(),
-                nextPluginRegistrationOrder++, Collections.unmodifiableSet(targets));
+                nextPluginRegistrationOrder++,
+                Collections.unmodifiableSet(targets),
+                Collections.unmodifiableSet(additionalClassPrefixes));
         transformerPlugins.add(entry);
         LOGGER.info("注册JavassistTransformer插件{}(补丁{}个)", clazz.getSimpleName(), providedPatchCount);
+    }
+
+
+    private Set<String> collectAdditionalClassPrefixes(ITransformerPlugin plugin, Class<?> pluginClass) {
+        LinkedHashSet<String> prefixes = new LinkedHashSet<>();
+        String[] declared;
+        try {
+            declared = plugin.additionalClassPrefixes();
+        } catch (Throwable t) {
+            LOGGER.warn("读取插件{}的additionalClassPrefixes()失败", pluginClass.getName(), t);
+            return prefixes;
+        }
+        if (declared == null) return prefixes;
+        for (int i=0;i<declared.length;i++) {
+            String raw = declared[i];
+            String normalized = normalizeAdditionalClassPrefix(raw);
+            if (normalized == null) {
+                LOGGER.warn("插件{}的additionalClassPrefixes()[{}]='{}'非法", pluginClass.getName(), i, raw);
+                continue;
+            }
+            if (!prefixes.add(normalized)) {
+                LOGGER.warn("插件{}重复声明额外类前缀{}", pluginClass.getName(), normalized);
+            }
+        }
+        return prefixes;
+    }
+
+    private static String normalizeAdditionalClassPrefix(String prefix) {
+        if (prefix == null) return null;
+        String value = prefix.trim().replace('/', '.');
+        if (value.isEmpty()) return null;
+        if (!value.endsWith(".")) return null;
+        if (value.startsWith("net.minecraft.") || value.startsWith("net.minecraftforge.")) return null;
+        if (value.indexOf('.') <= 0) return null;
+        String body = value.substring(0, value.length() - 1);
+        if (body.isEmpty() || body.contains("..")) return null;
+        String ident = "[A-Za-z_$][A-Za-z0-9_$]*";
+        return body.matches(ident + "(\\." + ident + ")+") ? value : null;
     }
 
     private int registerPluginPatches(ITransformerPlugin plugin, String sourceId, Class<?> pluginClass) {
@@ -158,7 +232,7 @@ public class PatchRegistry {
             list.add(entry);
             list.sort(Comparator.naturalOrder());
             LOGGER.info("为目标{}注册了补丁{}(优先级{}, 来源={})",
-                    target, clazz.getSimpleName(), ann.priority(), entry.sourceId());
+                    target, clazz.getSimpleName(), ann.priority(), entry.sourceId);
         }
     }
 
@@ -315,7 +389,7 @@ public class PatchRegistry {
     private static int findMatchingBracket(String json, int openPos) {
         int depth = 0;
         boolean inString = false;
-        for (int i = openPos; i < json.length(); i++) {
+        for (int i=openPos;i<json.length();i++) {
             char c = json.charAt(i);
             if (c == '"' && (i == 0 || json.charAt(i - 1) != '\\')) {
                 inString = !inString;
@@ -357,7 +431,7 @@ public class PatchRegistry {
             if (jar.getManifest() != null) {
                 patchList = jar.getManifest().getMainAttributes().getValue("JFFL-Patches");
             }
-            JarEntry serviceEntry = jar.getJarEntry(SERVICE_FILE);
+            JarEntry serviceEntry = jar.getJarEntry("META-INF/JFFL/IClassPatch.txt");
             if (patchList == null && serviceEntry == null) return;
             Set<String> classNames = new LinkedHashSet<>();
             Set<String> pluginClassNames = new LinkedHashSet<>();
@@ -374,8 +448,8 @@ public class PatchRegistry {
                         while (scanner.hasNextLine()) {
                             String line = scanner.nextLine().trim();
                             if (line.isEmpty() || line.startsWith("#")) continue;
-                            if (line.startsWith(PLUGIN_PREFIX)) {
-                                String pluginName = resolveServiceClassName(line.substring(PLUGIN_PREFIX.length()).trim(), currentPrefix);
+                            if (line.startsWith("Plugin:")) {
+                                String pluginName = resolveServiceClassName(line.substring("Plugin:".length()).trim(), currentPrefix);
                                 if (isFullyQualifiedClassName(pluginName)) {
                                     pluginClassNames.add(pluginName);
                                 } else {
@@ -451,7 +525,7 @@ public class PatchRegistry {
             if (requiredDependenciesPresent(entry)) {
                 candidates.add(entry);
             } else {
-                LOGGER.warn("补丁{}缺少必需依赖{}", entry.displayName(), entry.dependencies());
+                LOGGER.warn("补丁{}缺少必需依赖{}", entry.displayName(), entry.dependencies);
             }
         }
         candidates.sort(Comparator.naturalOrder());
@@ -474,13 +548,13 @@ public class PatchRegistry {
         }
         state.put(entry, VisitState.VISITING);
         stack.push(entry);
-        for (String dep : entry.dependencies()) {
+        for (String dep : entry.dependencies) {
             PatchEntry dependency = findMatchingEntry(candidates, dep);
             if (dependency != null) {
                 visitForDependencyOrder(targetClass, dependency, candidates, state, ordered, stack);
             }
         }
-        for (String dep : entry.optionalDependencies()) {
+        for (String dep : entry.optionalDependencies) {
             PatchEntry dependency = findMatchingEntry(candidates, dep);
             if (dependency != null) {
                 visitForDependencyOrder(targetClass, dependency, candidates, state, ordered, stack);
@@ -493,7 +567,7 @@ public class PatchRegistry {
     }
 
     private boolean requiredDependenciesPresent(PatchEntry entry) {
-        for (String dep : entry.dependencies()) {
+        for (String dep : entry.dependencies) {
             if (findMatchingEntry(allPatches, dep) == null) return false;
         }
         return true;
@@ -508,22 +582,22 @@ public class PatchRegistry {
     }
 
     private static boolean matchesDependency(PatchEntry entry, String dependency) {
-        if (dependency.equals(entry.patchClassName())) return true;
-        int lastDot = entry.patchClassName().lastIndexOf('.');
-        String simpleName = lastDot >= 0 ? entry.patchClassName().substring(lastDot + 1) : entry.patchClassName();
+        if (dependency.equals(entry.patchClassName)) return true;
+        int lastDot = entry.patchClassName.lastIndexOf('.');
+        String simpleName = lastDot >= 0 ? entry.patchClassName.substring(lastDot + 1) : entry.patchClassName;
         if (dependency.equals(simpleName)) return true;
-        if (dependency.equals(entry.sourceId())) return true;
-        if (dependency.equals(entry.sourceId() + ":" + entry.patchClassName())) return true;
-        if (dependency.equals(entry.sourceId() + "#" + entry.patchClassName())) return true;
-        if (dependency.equals(entry.sourceId() + ":" + simpleName)) return true;
-        if (dependency.equals(entry.sourceId() + "#" + simpleName)) return true;
+        if (dependency.equals(entry.sourceId)) return true;
+        if (dependency.equals(entry.sourceId + ":" + entry.patchClassName)) return true;
+        if (dependency.equals(entry.sourceId + "#" + entry.patchClassName)) return true;
+        if (dependency.equals(entry.sourceId + ":" + simpleName)) return true;
+        if (dependency.equals(entry.sourceId + "#" + simpleName)) return true;
         return false;
     }
 
     private static String describeCycle(ArrayDeque<PatchEntry> stack, PatchEntry repeated) {
-        StringBuilder sb = new StringBuilder(repeated.patchClassName());
+        StringBuilder sb = new StringBuilder(repeated.patchClassName);
         for (PatchEntry entry : stack) {
-            sb.append(" <- ").append(entry.patchClassName());
+            sb.append(" <- ").append(entry.patchClassName);
         }
         return sb.toString();
     }
@@ -536,6 +610,14 @@ public class PatchRegistry {
         return Collections.unmodifiableList(transformerPlugins);
     }
 
+    public Set<String> getAdditionalClassPrefixes() {
+        LinkedHashSet<String> prefixes = new LinkedHashSet<>();
+        for (TransformerPluginEntry entry : transformerPlugins) {
+            prefixes.addAll(entry.additionalClassPrefixes);
+        }
+        return Collections.unmodifiableSet(prefixes);
+    }
+
     public boolean hasTransformerPlugins() {
         return !transformerPlugins.isEmpty();
     }
@@ -543,7 +625,7 @@ public class PatchRegistry {
     public Set<String> getTransformerTargetClasses() {
         LinkedHashSet<String> targets = new LinkedHashSet<>(patchIndex.keySet());
         for (TransformerPluginEntry entry : transformerPlugins) {
-            targets.addAll(entry.targetClasses());
+            targets.addAll(entry.targetClasses);
         }
         return Collections.unmodifiableSet(targets);
     }
@@ -600,7 +682,7 @@ public class PatchRegistry {
     }
 
     private void scanDirectoryEntry(File dir, ClassLoader loader) {
-        File serviceFile = new File(dir, SERVICE_FILE);
+        File serviceFile = new File(dir, "META-INF/JFFL/IClassPatch.txt");
         File manifestFile = new File(dir, "META-INF/MANIFEST.MF");
         if (!serviceFile.isFile() && !manifestFile.isFile()) return;
         Set<String> classNames = new LinkedHashSet<>();
@@ -625,8 +707,8 @@ public class PatchRegistry {
                 while (scanner.hasNextLine()) {
                     String line = scanner.nextLine().trim();
                     if (line.isEmpty() || line.startsWith("#")) continue;
-                    if (line.startsWith(PLUGIN_PREFIX)) {
-                        String pluginName = resolveServiceClassName(line.substring(PLUGIN_PREFIX.length()).trim(), currentPrefix);
+                    if (line.startsWith("Plugin:")) {
+                        String pluginName = resolveServiceClassName(line.substring("Plugin:".length()).trim(), currentPrefix);
                         if (isFullyQualifiedClassName(pluginName)) {
                             pluginClassNames.add(pluginName);
                         } else {
@@ -717,7 +799,7 @@ public class PatchRegistry {
     private URLClassLoader buildPatchClassLoader(List<File> entries) {
         try {
             URL[] urls = new URL[entries.size()];
-            for (int i = 0; i < entries.size(); i++) {
+            for (int i=0;i<entries.size();i++) {
                 urls[i] = entries.get(i).toURI().toURL();
             }
             return new URLClassLoader(urls, PatchRegistry.class.getClassLoader());
