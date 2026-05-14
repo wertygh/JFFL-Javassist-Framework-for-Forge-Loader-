@@ -9,7 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class InjectionPoints {
-    private static final Logger LOGGER = LoggerFactory.getLogger(InjectionPoints.class);
+    private static Logger LOGGER = LoggerFactory.getLogger(InjectionPoints.class);
     
     public static int[] resolveSliceRange(CtMethod method, Slice slice) {
         if (slice == null) return new int[]{-1, Integer.MAX_VALUE};
@@ -35,10 +35,10 @@ public class InjectionPoints {
         if (at.value() == At.Value.TAIL) return Integer.MAX_VALUE;
         if (at.value() == At.Value.LINE) return at.line();
         if (at.value() == At.Value.INVOKE || at.value() == At.Value.FIELD) {
-            final int[] result = {-1};
-            final int wantOrdinal = at.ordinal();
-            final String target = at.target();
-            final int[] seen = {0};
+            int[] result = {-1};
+            int wantOrdinal = at.ordinal();
+            String target = at.target();
+            int[] seen = {0};
             try {
                 if (at.value() == At.Value.INVOKE) {
                     method.instrument(new ExprEditor() {
@@ -92,10 +92,10 @@ public class InjectionPoints {
         if (at.value() != At.Value.INVOKE && at.value() != At.Value.FIELD) {
             throw new CannotCompileException("@Redirect仅支持@At(INVOKE)或@At(FIELD)");
         }
-        final int wantOrdinal = at.ordinal();
-        final String target = at.target();
-        final int[] seen = {0};
-        final int[] matched = {0};
+        int wantOrdinal = at.ordinal();
+        String target = at.target();
+        int[] seen = {0};
+        int[] matched = {0};
         if (at.value() == At.Value.INVOKE) {
             method.instrument(new ExprEditor() {
                 @Override public void edit(MethodCall mc) throws CannotCompileException {
@@ -163,11 +163,11 @@ public class InjectionPoints {
     }
 
     private static boolean instrumentInvoke(CtMethod method, At at, String src, int sliceFrom, int sliceTo) throws CannotCompileException {
-        final int wantOrdinal = at.ordinal();
-        final String target = at.target();
-        final boolean shiftAfter = at.shift() == At.Shift.AFTER;
-        final int[] seen = {0};
-        final int[] matched = {0};
+        int wantOrdinal = at.ordinal();
+        String target = at.target();
+        boolean shiftAfter = at.shift() == At.Shift.AFTER;
+        int[] seen = {0};
+        int[] matched = {0};
         method.instrument(new ExprEditor() {
             @Override public void edit(MethodCall mc) throws CannotCompileException {
                 if (!isInSlice(mc.getLineNumber(), sliceFrom, sliceTo)) return;
@@ -194,11 +194,11 @@ public class InjectionPoints {
     }
 
     private static boolean instrumentField(CtMethod method, At at, String src, int sliceFrom, int sliceTo) throws CannotCompileException {
-        final int wantOrdinal = at.ordinal();
-        final String target = at.target();
-        final boolean shiftAfter = at.shift() == At.Shift.AFTER;
-        final int[] seen = {0};
-        final int[] matched = {0};
+        int wantOrdinal = at.ordinal();
+        String target = at.target();
+        boolean shiftAfter = at.shift() == At.Shift.AFTER;
+        int[] seen = {0};
+        int[] matched = {0};
         method.instrument(new ExprEditor() {
             @Override public void edit(FieldAccess fa) throws CannotCompileException {
                 if (!isInSlice(fa.getLineNumber(), sliceFrom, sliceTo)) return;
@@ -313,16 +313,16 @@ public class InjectionPoints {
 
     private static void writeWithNops(CodeIterator it, int pos, int origSize, byte[] replacement) throws BadBytecode {
         if (replacement.length <= origSize) {
-            for (int i = 0; i < replacement.length; i++) {
+            for (int i=0;i<replacement.length;i++) {
                 it.writeByte(replacement[i] & 0xFF, pos + i);
             }
-            for (int i = replacement.length; i < origSize; i++) {
+            for (int i=replacement.length;i<origSize;i++) {
                 it.writeByte(Opcode.NOP, pos + i);
             }
         } else {
             int extra = replacement.length - origSize;
             it.insertGap(pos, extra);
-            for (int i = 0; i < replacement.length; i++) {
+            for (int i=0;i<replacement.length;i++) {
                 it.writeByte(replacement[i] & 0xFF, pos + i);
             }
         }
@@ -366,7 +366,16 @@ public class InjectionPoints {
     }
 
     private enum NumType { FLOAT, DOUBLE, LONG }
-    private record NumericConstant(double value, NumType type) {}
+
+    private static class NumericConstant {
+        public double value;
+        public NumType type;
+
+        NumericConstant(double value, NumType type) {
+            this.value = value;
+            this.type = type;
+        }
+    }
 
     private static NumericConstant readNumericConstant(CodeIterator it, ConstPool cp, int pos, int op) {
         try {
@@ -548,7 +557,7 @@ public class InjectionPoints {
         if (s.length() >= 2 && s.charAt(0) == '"' && s.charAt(s.length() - 1) == '"') {
             s = s.substring(1, s.length() - 1);
             StringBuilder sb = new StringBuilder(s.length());
-            for (int i = 0; i < s.length(); i++) {
+            for (int i=0;i<s.length();i++) {
                 char c = s.charAt(i);
                 if (c == '\\' && i + 1 < s.length()) {
                     char next = s.charAt(++i);

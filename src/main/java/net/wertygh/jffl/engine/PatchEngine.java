@@ -25,19 +25,20 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class PatchEngine {
-    private static final Logger LOGGER = LoggerFactory.getLogger(PatchEngine.class);
-    private static final boolean DEV_DUMP = DevEnvironment.isDev()
+    private static Logger LOGGER = LoggerFactory.getLogger(PatchEngine.class);
+    private static boolean DEV_DUMP = DevEnvironment.isDev()
             && "true".equalsIgnoreCase(System.getProperty("jffl.dev.dump"));
-    private final PatchRegistry registry;
-    private final ClassPool classPool;
-    private final PatchApplicator applicator;
-    private final AtomicBoolean mappingsLoadAttempted = new AtomicBoolean(false);
-    private volatile boolean autoLoadMappings = true;
+    public PatchRegistry registry;
+    public ClassPool classPool;
+    public PatchApplicator applicator;
+    public AtomicBoolean mappingsLoadAttempted = new AtomicBoolean(false);
+    public volatile boolean autoLoadMappings = true;
 
     public PatchEngine(PatchRegistry registry) {
         this.registry = registry;
         this.classPool = new ClassPool(true);
-        this.classPool.appendClassPath(new LoaderClassPath(Thread.currentThread().getContextClassLoader()));
+        ClassLoader cl = PatchEngine.class.getClassLoader();
+        this.classPool.appendClassPath(new LoaderClassPath(cl));
         this.applicator = new PatchApplicator(classPool);
     }
 
@@ -98,21 +99,21 @@ public class PatchEngine {
                 PatchContext ctx = new PatchContext(className, classPool);
                 List<PatchRegistry.PatchEntry> active = new ArrayList<>(patches.size());
                 for (PatchRegistry.PatchEntry e : patches) {
-                    if (ConditionEvaluator.shouldApply(e.patch().getClass(), classPool, ctClass)) {
+                    if (ConditionEvaluator.shouldApply(e.patch.getClass(), classPool, ctClass)) {
                         active.add(e);
                     } else if (DevEnvironment.isDev()) {
                         LOGGER.debug("[DEV] @ConditionalPatch 不满足, 跳过 {} -> {}",
-                                e.patch().getClass().getSimpleName(), className);
+                                e.patch.getClass().getSimpleName(), className);
                     }
                 }
                 for (PatchRegistry.PatchEntry entry : active) {
                     try {
                         if (DevEnvironment.isDev()) {
                             LOGGER.debug("[DEV] 应用补丁: {} → {} (优先级 {}, 来源={})",
-                                    entry.patchClassName(), className, entry.priority(), entry.sourceId());
+                                    entry.patchClassName, className, entry.priority, entry.sourceId);
                         }
                         applicator.applyPatch(ctClass, entry, ctx);
-                        DumpClass dc = entry.patch().getClass().getAnnotation(DumpClass.class);
+                        DumpClass dc = entry.patch.getClass().getAnnotation(DumpClass.class);
                         if (dc != null) {
                             shouldDump = true;
                             dumpDir = dc.dir();
@@ -127,12 +128,12 @@ public class PatchEngine {
                     }
                 }
                 byte[] result = ctClass.toBytecode();
-                boolean anyAsm = active.stream().anyMatch(e -> e.patch() instanceof RawAsmPatch);
+                boolean anyAsm = active.stream().anyMatch(e -> e.patch instanceof RawAsmPatch);
                 if (anyAsm) {
                     ClassNode node = AsmBridge.toClassNode(result);
                     PatchContext ctxAsm = new PatchContext(className, classPool);
                     for (PatchRegistry.PatchEntry entry : active) {
-                        if (entry.patch() instanceof RawAsmPatch asm) {
+                        if (entry.patch instanceof RawAsmPatch asm) {
                             try {
                                 asm.transform(node, ctxAsm);
                             } catch (Exception e) {

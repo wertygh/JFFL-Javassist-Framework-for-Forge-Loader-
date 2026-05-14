@@ -22,28 +22,99 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
+import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class CallbackDispatcher {
-    private static final Logger LOGGER = LoggerFactory.getLogger(CallbackDispatcher.class);
-    private static final int INITIAL_CAP = 64;
-    private static final Object[] NO_ARGS = new Object[0];
+    private static Logger LOGGER = LoggerFactory.getLogger(CallbackDispatcher.class);
+    private static int INITIAL_CAP = 64;
+    private static Object[] NO_ARGS = new Object[0];
     public static volatile Handler[] DIRECT = new Handler[INITIAL_CAP];
-    private static final Object GROW_LOCK = new Object();
+    private static Object GROW_LOCK = new Object();
     private static int nextId = 0;
-    private static final ConcurrentHashMap<DedupKey, Integer> DEDUP = new ConcurrentHashMap<>();
-    private static final ThreadLocal<String> DISPATCH_STATE_KEY = new ThreadLocal<>();
-    private static final ThreadLocal<Deque<StateFrame>> STATE_FRAMES = ThreadLocal.withInitial(ArrayDeque::new);
-    private record DedupKey(Object instance, Method method, boolean returnable) {}
-    private record Binding(boolean includeSelf, boolean includeArgsArray, int boundArgCount) {}
-    private record StateFrame(String key, Map<StateSlot, Object> values) {}
-    private record StateSlot(String name, Class<?> type) {}
-    private record StateSpec(String name, Class<?> type) {}
-    private static final Binding NO_BINDING = new Binding(false, false, 0);
-    private static final Binding SELF_ONLY = new Binding(true, false, 0);
-    private static final Binding ARGS_ONLY = new Binding(false, true, 0);
-    private static final Binding SELF_AND_ARGS = new Binding(true, true, 0);
+    private static ConcurrentHashMap<DedupKey, Integer> DEDUP = new ConcurrentHashMap<>();
+    private static ThreadLocal<String> DISPATCH_STATE_KEY = new ThreadLocal<>();
+    private static ThreadLocal<Deque<StateFrame>> STATE_FRAMES = ThreadLocal.withInitial(ArrayDeque::new);
+    private static class DedupKey {
+        public Object instance;
+        public Method method;
+        public boolean returnable;
+
+        DedupKey(Object instance, Method method, boolean returnable) {
+            this.instance = instance;
+            this.method = method;
+            this.returnable = returnable;
+        }
+
+        @Override public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof DedupKey k)) return false;
+            return returnable == k.returnable
+                    && Objects.equals(instance, k.instance)
+                    && Objects.equals(method, k.method);
+        }
+
+        @Override public int hashCode() {
+            return Objects.hash(instance, method, returnable);
+        }
+    }
+
+    private static class Binding {
+        public boolean includeSelf;
+        public boolean includeArgsArray;
+        public int boundArgCount;
+
+        Binding(boolean includeSelf, boolean includeArgsArray, int boundArgCount) {
+            this.includeSelf = includeSelf;
+            this.includeArgsArray = includeArgsArray;
+            this.boundArgCount = boundArgCount;
+        }
+    }
+
+    private static class StateFrame {
+        public String key;
+        public Map<StateSlot, Object> values;
+
+        StateFrame(String key, Map<StateSlot, Object> values) {
+            this.key = key;
+            this.values = values;
+        }
+    }
+
+    private static class StateSlot {
+        public String name;
+        public Class<?> type;
+
+        StateSlot(String name, Class<?> type) {
+            this.name = name;
+            this.type = type;
+        }
+
+        @Override public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof StateSlot s)) return false;
+            return Objects.equals(name, s.name) && Objects.equals(type, s.type);
+        }
+
+        @Override public int hashCode() {
+            return Objects.hash(name, type);
+        }
+    }
+
+    private static class StateSpec {
+        public String name;
+        public Class<?> type;
+
+        StateSpec(String name, Class<?> type) {
+            this.name = name;
+            this.type = type;
+        }
+    }
+    private static Binding NO_BINDING = new Binding(false, false, 0);
+    private static Binding SELF_ONLY = new Binding(true, false, 0);
+    private static Binding ARGS_ONLY = new Binding(false, true, 0);
+    private static Binding SELF_AND_ARGS = new Binding(true, true, 0);
 
     @FunctionalInterface public interface BoundSimple {
         void call(Object self, CallbackInfo ci) throws Throwable;
@@ -62,12 +133,12 @@ public class CallbackDispatcher {
     }
 
     public static class Handler {
-        public final Object instance;
-        public final boolean returnable;
-        public final boolean acceptsArgs;
-        public final boolean needsState;
-        final BoundCallback callback;
-        final BoundWrap wrap;
+        public Object instance;
+        public boolean returnable;
+        public boolean acceptsArgs;
+        public boolean needsState;
+        BoundCallback callback;
+        BoundWrap wrap;
 
         private Handler(Object instance, boolean returnable, boolean acceptsArgs, boolean needsState, BoundCallback callback, BoundWrap wrap) {
             this.instance = instance;
@@ -134,7 +205,7 @@ public class CallbackDispatcher {
         int terminal = params.length - 1;
         if (terminal < 0) return false;
         Annotation[][] annotations = method.getParameterAnnotations();
-        for (int i = 0; i < terminal; i++) {
+        for (int i=0;i<terminal;i++) {
             if (findStateAnnotation(annotations[i]) != null) return true;
         }
         return false;
@@ -273,7 +344,7 @@ public class CallbackDispatcher {
         if (key == null || key.isEmpty()) return;
         Deque<StateFrame> frames = STATE_FRAMES.get();
         StateFrame current = frames.peek();
-        if (current == null || !key.equals(current.key())) {
+        if (current == null || !key.equals(current.key)) {
             enterStateFrame(key);
         }
     }
@@ -282,13 +353,13 @@ public class CallbackDispatcher {
         if (key == null || key.isEmpty()) return;
         Deque<StateFrame> frames = STATE_FRAMES.get();
         StateFrame current = frames.peek();
-        if (current != null && key.equals(current.key())) {
+        if (current != null && key.equals(current.key)) {
             frames.pop();
             cleanupFrames(frames);
             return;
         }
         for (Iterator<StateFrame> it = frames.iterator(); it.hasNext();) {
-            if (key.equals(it.next().key())) {
+            if (key.equals(it.next().key)) {
                 it.remove();
                 break;
             }
@@ -327,7 +398,7 @@ public class CallbackDispatcher {
     private static StateFrame findFrame(String key) {
         if (key == null || key.isEmpty()) return null;
         for (StateFrame frame : STATE_FRAMES.get()) {
-            if (key.equals(frame.key())) return frame;
+            if (key.equals(frame.key)) return frame;
         }
         return null;
     }
@@ -360,7 +431,7 @@ public class CallbackDispatcher {
     }
 
     private static boolean parametersCompatible(Class<?>[] parameterTypes, Object[] args) {
-        for (int i = 0; i < parameterTypes.length; i++) {
+        for (int i=0;i<parameterTypes.length;i++) {
             if (!isValueCompatible(parameterTypes[i], args[i])) return false;
         }
         return true;
@@ -415,9 +486,9 @@ public class CallbackDispatcher {
     }
 
     private static BoundCallback buildAdaptiveCallback(Object instance, Method m) {
-        final Class<?>[] params = m.getParameterTypes();
-        final StateSpec[] stateSpecs = collectStateSpecs(m, params.length - 1);
-        final Class<?>[] callbackCore = bindableCoreTypes(params, stateSpecs, params.length - 1);
+        Class<?>[] params = m.getParameterTypes();
+        StateSpec[] stateSpecs = collectStateSpecs(m, params.length - 1);
+        Class<?>[] callbackCore = bindableCoreTypes(params, stateSpecs, params.length - 1);
         return (self, args, ci) -> {
             Object[] safeArgs = args == null ? NO_ARGS : args;
             Binding binding = resolveBinding(callbackCore, safeArgs);
@@ -432,9 +503,9 @@ public class CallbackDispatcher {
             BoundWrap fast = buildLegacyWrap(instance, m);
             if (fast != null) return fast;
         }
-        final Class<?>[] params = m.getParameterTypes();
-        final StateSpec[] stateSpecs = collectStateSpecs(m, params.length - 1);
-        final Class<?>[] callbackCore = bindableCoreTypes(params, stateSpecs, params.length - 1);
+        Class<?>[] params = m.getParameterTypes();
+        StateSpec[] stateSpecs = collectStateSpecs(m, params.length - 1);
+        Class<?>[] callbackCore = bindableCoreTypes(params, stateSpecs, params.length - 1);
         return (self, args, original) -> {
             Object[] safeArgs = args == null ? NO_ARGS : args;
             Binding binding = resolveBinding(callbackCore, safeArgs);
@@ -482,7 +553,7 @@ public class CallbackDispatcher {
     }
 
     private static boolean compatiblePrefix(Class<?>[] callbackCore, int coreOffset, Object[] args, int count) {
-        for (int i = 0; i < count; i++) {
+        for (int i=0;i<count;i++) {
             if (!isValueCompatible(callbackCore[coreOffset + i], args[i])) return false;
         }
         return true;
@@ -494,18 +565,18 @@ public class CallbackDispatcher {
     }
 
     private static Object[] buildCoreArguments(Binding binding, Object self, Object[] args) {
-        int totalCount = (binding.includeSelf() ? 1 : 0)
-                + (binding.includeArgsArray() ? 1 : 0)
-                + binding.boundArgCount();
+        int totalCount = (binding.includeSelf ? 1 : 0)
+                + (binding.includeArgsArray ? 1 : 0)
+                + binding.boundArgCount;
         Object[] coreArgs = new Object[totalCount];
         int idx = 0;
-        if (binding.includeSelf()) {
+        if (binding.includeSelf) {
             coreArgs[idx++] = self;
         }
-        if (binding.includeArgsArray()) {
+        if (binding.includeArgsArray) {
             coreArgs[idx++] = args;
         }
-        for (int i = 0; i < binding.boundArgCount(); i++) {
+        for (int i=0;i<binding.boundArgCount;i++) {
             coreArgs[idx++] = args[i];
         }
         return coreArgs;
@@ -514,7 +585,7 @@ public class CallbackDispatcher {
     private static Object[] buildInvokeArguments(int totalCount, int terminalIndex, StateSpec[] stateSpecs, Object[] boundCore, Object terminal) throws ReflectiveOperationException {
         Object[] invokeArgs = new Object[totalCount];
         int coreIdx = 0;
-        for (int i = 0; i < terminalIndex; i++) {
+        for (int i=0;i<terminalIndex;i++) {
             StateSpec state = stateSpecs[i];
             if (state != null) {
                 invokeArgs[i] = stateValue(state);
@@ -539,7 +610,7 @@ public class CallbackDispatcher {
         StateSpec[] result = new StateSpec[params.length];
         if (terminalIndex <= 0) return result;
         Annotation[][] annotations = method.getParameterAnnotations();
-        for (int i = 0; i < terminalIndex; i++) {
+        for (int i=0;i<terminalIndex;i++) {
             State state = findStateAnnotation(annotations[i]);
             if (state == null) continue;
             String name = state.value().isEmpty() ? params[i].getName() : state.value();
@@ -558,12 +629,12 @@ public class CallbackDispatcher {
 
     private static Class<?>[] bindableCoreTypes(Class<?>[] params, StateSpec[] stateSpecs, int terminalIndex) {
         int count = 0;
-        for (int i = 0; i < terminalIndex; i++) {
+        for (int i=0;i<terminalIndex;i++) {
             if (stateSpecs[i] == null) count++;
         }
         Class<?>[] result = new Class<?>[count];
         int out = 0;
-        for (int i = 0; i < terminalIndex; i++) {
+        for (int i=0;i<terminalIndex;i++) {
             if (stateSpecs[i] == null) result[out++] = params[i];
         }
         return result;
@@ -580,11 +651,11 @@ public class CallbackDispatcher {
             enterStateFrame(key);
             frame = findFrame(key);
         }
-        StateSlot slot = new StateSlot(spec.name(), spec.type());
-        Object existing = frame.values().get(slot);
+        StateSlot slot = new StateSlot(spec.name, spec.type);
+        Object existing = frame.values.get(slot);
         if (existing != null) return existing;
-        Object created = createStateInstance(spec.type());
-        Object raced = frame.values().putIfAbsent(slot, created);
+        Object created = createStateInstance(spec.type);
+        Object raced = frame.values.putIfAbsent(slot, created);
         return raced != null ? raced : created;
     }
 
@@ -612,7 +683,7 @@ public class CallbackDispatcher {
 
     private static String describe(Class<?>[] types) {
         StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < types.length; i++) {
+        for (int i=0;i<types.length;i++) {
             if (i > 0) sb.append(", ");
             sb.append(types[i].getName());
         }
@@ -621,7 +692,7 @@ public class CallbackDispatcher {
 
     private static String describeArgs(Object[] args) {
         StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < args.length; i++) {
+        for (int i=0;i<args.length;i++) {
             if (i > 0) sb.append(", ");
             Object arg = args[i];
             sb.append(arg == null ? "null" : arg.getClass().getName());

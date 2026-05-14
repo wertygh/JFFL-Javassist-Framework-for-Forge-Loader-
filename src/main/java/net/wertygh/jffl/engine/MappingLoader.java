@@ -13,8 +13,7 @@ import java.nio.file.Path;
 import java.util.*;
 
 public class MappingLoader {
-    private static final Logger LOGGER = LoggerFactory.getLogger(MappingLoader.class);
-    private static final String MCG_CLASS = "javassist.compiler.MemberCodeGen";
+    private static Logger LOGGER = LoggerFactory.getLogger(MappingLoader.class);
     private static volatile boolean loaded = false;
     private static volatile int fieldCount = 0;
     private static volatile int methodCount = 0;
@@ -24,11 +23,8 @@ public class MappingLoader {
     private static Method clearMappings;
     
     public static void loadFromCustomBzip2Resource(String resourcePath) {
-        InputStream is = MappingLoader.class.getResourceAsStream(resourcePath);
-        if (is == null) {
-            is = Thread.currentThread().getContextClassLoader()
-                    .getResourceAsStream(resourcePath.startsWith("/") ? resourcePath.substring(1) : resourcePath);
-        }
+        String p = resourcePath.startsWith("/") ? resourcePath.substring(1) : resourcePath;
+        InputStream is = MappingLoader.class.getClassLoader().getResourceAsStream(p);
         if (is == null) {
             LOGGER.warn("找不到mappings: {}", resourcePath);
             return;
@@ -99,7 +95,7 @@ public class MappingLoader {
                 String obfName = parts[0];
                 String officialName = parts[1];
                 StringBuilder descBuilder = new StringBuilder(parts[2]);
-                for (int i = 3; i < parts.length; i++) {
+                for (int i=3;i<parts.length;i++) {
                     descBuilder.append(" ").append(parts[i]);
                 }
                 String descriptor = descBuilder.toString();
@@ -153,8 +149,8 @@ public class MappingLoader {
     }
 
     private static class ClassContext {
-        final String classPath;
-        final int indent;
+        String classPath;
+        int indent;
         ClassContext(String classPath, int indent) {
             this.classPath = classPath;
             this.indent = indent;
@@ -206,12 +202,8 @@ public class MappingLoader {
     }
     
     public static void loadFromResource(String resourcePath) {
-        InputStream is = MappingLoader.class.getResourceAsStream(resourcePath);
-        if (is == null) {
-            is = Thread.currentThread().getContextClassLoader()
-                    .getResourceAsStream(resourcePath.startsWith("/")
-                            ? resourcePath.substring(1) : resourcePath);
-        }
+        String p = resourcePath.startsWith("/") ? resourcePath.substring(1) : resourcePath;
+        InputStream is = MappingLoader.class.getClassLoader().getResourceAsStream(p);
         if (is == null) {
             LOGGER.error("未找到映射：{}", resourcePath);
             return;
@@ -360,25 +352,18 @@ public class MappingLoader {
     
     private static synchronized void ensureReflection() throws ReflectiveOperationException {
         if (addFieldMapping != null) return;
-        ClassLoader cl = Thread.currentThread().getContextClassLoader();
-        if (cl == null) cl = MappingLoader.class.getClassLoader();
-        Class<?> mcg;
-        try {
-            mcg = Class.forName(MCG_CLASS, true, cl);
-        } catch (ClassNotFoundException e) {
-            LOGGER.warn("通过context ClassLoader加载{}失败(这咋失败的?)", MCG_CLASS);
-            mcg = Class.forName(MCG_CLASS, true, MappingLoader.class.getClassLoader());
-        }
+        ClassLoader cl = MappingLoader.class.getClassLoader();
+        Class<?> mcg = Class.forName("javassist.compiler.MemberCodeGen", true, cl);
         try {
             addFieldMapping = mcg.getMethod("jffl$addFieldMapping", String.class, String.class);
             addMethodMapping = mcg.getMethod("jffl$addMethodMapping", String.class, String.class);
             addMethodDescMapping = mcg.getMethod("jffl$addMethodDescMapping", String.class, String.class);
             clearMappings = mcg.getMethod("jffl$clearMappings");
         } catch (NoSuchMethodException e) {
-            LOGGER.error("加载到的{}来自{}, 缺少jffl$方法.", MCG_CLASS, mcg.getClassLoader());
+            LOGGER.error("加载到的{}来自{}, 缺少jffl$方法.", "javassist.compiler.MemberCodeGen", mcg.getClassLoader());
             throw e;
         }
-        LOGGER.debug("MappingLoader反射已针对{}初始化", MCG_CLASS, mcg.getClassLoader());
+        LOGGER.debug("MappingLoader反射已针对{}初始化", "javassist.compiler.MemberCodeGen", mcg.getClassLoader());
     }
 
     public static void autoDiscover() {
@@ -386,15 +371,12 @@ public class MappingLoader {
             LOGGER.info("跳过映射自动发现, 类名已经是MCP/Mojang名称");
             return;
         }
-        String customResource = "/assets/mappings/mappings.bz2";
-        if (MappingLoader.class.getResource(customResource) != null) {
+        String customResource = "assets/mappings/mappings.bz2";
+        if (MappingLoader.class.getClassLoader().getResource(customResource) != null) {
             loadFromCustomBzip2Resource(customResource);
             if (loaded) return;
         }
-        InputStream res = MappingLoader.class.getResourceAsStream("/mappings/mappings.srg");
-        if (res == null) {
-            res = Thread.currentThread().getContextClassLoader().getResourceAsStream("mappings/mappings.srg");
-        }
+        InputStream res = MappingLoader.class.getClassLoader().getResourceAsStream("mappings/mappings.srg");
         if (res != null) {
             try (InputStream ignored = res) {
                 loadFromStream(res);

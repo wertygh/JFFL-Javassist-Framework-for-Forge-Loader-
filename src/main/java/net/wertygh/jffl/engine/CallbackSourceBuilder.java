@@ -287,7 +287,7 @@ public class CallbackSourceBuilder {
     private static void appendArgsArray(StringBuilder sb, String[] argRefs) {
         sb.append("Object[] jffl_args = new Object[")
           .append(argRefs.length).append("];");
-        for (int i = 0; i < argRefs.length; i++) {
+        for (int i=0;i<argRefs.length;i++) {
             sb.append("jffl_args[").append(i).append("] = ($w) ")
               .append(argRefs[i]).append(";");
         }

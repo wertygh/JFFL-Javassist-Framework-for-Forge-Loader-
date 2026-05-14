@@ -16,15 +16,15 @@ import java.lang.reflect.Method;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class PatchApplicator {
-    private static final Logger LOGGER = LoggerFactory.getLogger(PatchApplicator.class);
-    private final ClassPool classPool;
+    private static Logger LOGGER = LoggerFactory.getLogger(PatchApplicator.class);
+    public ClassPool classPool;
 
     public PatchApplicator(ClassPool classPool) {
         this.classPool = classPool;
     }
 
     public void applyPatch(CtClass ctClass, PatchRegistry.PatchEntry entry, PatchContext ctx) throws Exception {
-        IClassPatch patch = entry.patch();
+        IClassPatch patch = entry.patch;
         String patchOwner = entry.displayName();
         Class<?> patchClass = patch.getClass();
         Patch[] patchAnns = patchClass.getAnnotationsByType(Patch.class);

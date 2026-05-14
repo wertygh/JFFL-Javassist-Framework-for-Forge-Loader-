@@ -11,18 +11,18 @@ import java.lang.reflect.Method;
 public class ExprInstrumenter {
     public static void applyInstrumentInstanceof(CtClass ctClass, IClassPatch patch, Method handlerMethod, InstrumentInstanceof ann, PatchContext ctx) throws Exception {
         CtMethod target = EngineUtils.findMethod(ctClass, ann.method(), ann.desc());
-        final boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
-        final String replacement = callback ? null : (String) handlerMethod.invoke(patch);
-        final String callbackReplacement = callback
+        boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
+        String replacement = callback ? null : (String) handlerMethod.invoke(patch);
+        String callbackReplacement = callback
                 ? CallbackSourceBuilder.buildExprValueCallback(
                     patch, handlerMethod, ann.method(), "boolean", 
                     Modifier.isStatic(target.getModifiers()) ? "null" : "$0", 
                     new String[]{"$1"}, "boolean"
                 )
                 : null;
-        final String targetType = ann.target();
-        final int wantOrdinal = ann.ordinal();
-        final int[] seen = {0};
+        String targetType = ann.target();
+        int wantOrdinal = ann.ordinal();
+        int[] seen = {0};
         target.instrument(new ExprEditor() {
             @Override public void edit(Instanceof i) throws CannotCompileException {
                 try {
@@ -37,17 +37,17 @@ public class ExprInstrumenter {
 
     public static void applyInstrumentHandler(CtClass ctClass, IClassPatch patch, Method handlerMethod, InstrumentHandler ann, PatchContext ctx) throws Exception {
         CtMethod target = EngineUtils.findMethod(ctClass, ann.method(), ann.desc());
-        final boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
-        final String replacement = callback
+        boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
+        String replacement = callback
                 ? CallbackSourceBuilder.buildExprInsertionCallback(
                     patch, handlerMethod, ann.method(), 
                     Modifier.isStatic(target.getModifiers()) ? "null" : "$0", 
                     new String[]{"$1"}
                 )
                 : (String) handlerMethod.invoke(patch);
-        final String exType = ann.exceptionType();
-        final int wantOrdinal = ann.ordinal();
-        final int[] seen = {0};
+        String exType = ann.exceptionType();
+        int wantOrdinal = ann.ordinal();
+        int[] seen = {0};
         target.instrument(new ExprEditor() {
             @Override public void edit(Handler h) throws CannotCompileException {
                 try {
@@ -65,12 +65,12 @@ public class ExprInstrumenter {
 
     public static void applyInstrumentFieldAccess(CtClass ctClass, IClassPatch patch, Method handlerMethod, InstrumentFieldAccess ann, PatchContext ctx) throws Exception {
         CtMethod target = EngineUtils.findMethod(ctClass, ann.method(), ann.desc());
-        final boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
-        final String replacement = callback ? null : (String) handlerMethod.invoke(patch);
-        final String fieldTarget = ann.target();
-        final InstrumentFieldAccess.AccessType accessType = ann.accessType();
-        final int wantOrdinal = ann.ordinal();
-        final int[] seen = {0};
+        boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
+        String replacement = callback ? null : (String) handlerMethod.invoke(patch);
+        String fieldTarget = ann.target();
+        InstrumentFieldAccess.AccessType accessType = ann.accessType();
+        int wantOrdinal = ann.ordinal();
+        int[] seen = {0};
         target.instrument(new ExprEditor() {
             @Override public void edit(FieldAccess fa) throws CannotCompileException {
                 if (accessType == InstrumentFieldAccess.AccessType.READ  && fa.isWriter()) return;
@@ -116,11 +116,11 @@ public class ExprInstrumenter {
 
     public static void applyInstrumentConstructorCall(CtClass ctClass, IClassPatch patch, Method handlerMethod, InstrumentConstructorCall ann, PatchContext ctx) throws Exception {
         CtMethod target = EngineUtils.findMethod(ctClass, ann.method(), ann.desc());
-        final boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
-        final String replacement = callback ? null : (String) handlerMethod.invoke(patch);
-        final String targetType = ann.target();
-        final int wantOrdinal = ann.ordinal();
-        final int[] seen = {0};
+        boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
+        String replacement = callback ? null : (String) handlerMethod.invoke(patch);
+        String targetType = ann.target();
+        int wantOrdinal = ann.ordinal();
+        int[] seen = {0};
         target.instrument(new ExprEditor() {
             @Override public void edit(ConstructorCall c) throws CannotCompileException {
                 if (!targetType.isEmpty() && !c.getClassName().equals(targetType)
@@ -162,11 +162,11 @@ public class ExprInstrumenter {
 
     public static void applyInstrumentNewExpr(CtClass ctClass, IClassPatch patch, Method handlerMethod, InstrumentNewExpr ine, PatchContext ctx) throws Exception {
         CtMethod target = EngineUtils.findMethod(ctClass, ine.method(), ine.desc());
-        final boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
-        final String replacement = callback ? null : (String) handlerMethod.invoke(patch);
-        final String targetType = ine.target().replace('.', '/');
-        final int wantOrdinal = ine.ordinal();
-        final int[] seen = {0};
+        boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
+        String replacement = callback ? null : (String) handlerMethod.invoke(patch);
+        String targetType = ine.target().replace('.', '/');
+        int wantOrdinal = ine.ordinal();
+        int[] seen = {0};
         target.instrument(new ExprEditor() {
             @Override public void edit(NewExpr e) throws CannotCompileException {
                 if (!targetType.isEmpty()
@@ -191,11 +191,11 @@ public class ExprInstrumenter {
 
     public static void applyInstrumentCast(CtClass ctClass, IClassPatch patch, Method handlerMethod, InstrumentCast ic, PatchContext ctx) throws Exception {
         CtMethod target = EngineUtils.findMethod(ctClass, ic.method(), ic.desc());
-        final boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
-        final String replacement = callback ? null : (String) handlerMethod.invoke(patch);
-        final String targetType = ic.target();
-        final int wantOrdinal = ic.ordinal();
-        final int[] seen = {0};
+        boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
+        String replacement = callback ? null : (String) handlerMethod.invoke(patch);
+        String targetType = ic.target();
+        int wantOrdinal = ic.ordinal();
+        int[] seen = {0};
         target.instrument(new ExprEditor() {
             @Override public void edit(Cast c) throws CannotCompileException {
                 String typeName;
@@ -221,13 +221,13 @@ public class ExprInstrumenter {
 
     public static void applyModifyArg(CtClass ctClass, IClassPatch patch, Method handlerMethod, ModifyArg ma, PatchContext ctx) throws Exception {
         CtMethod target = EngineUtils.findMethod(ctClass, ma.method(), ma.desc());
-        final boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
-        final String replacement = callback ? null : (String) handlerMethod.invoke(patch);
-        final int argIndex = ma.index();
-        final String invokeTarget = ma.target();
-        final int wantOrdinal = ma.ordinal();
-        final int[] seen = {0};
-        final int[] matched = {0};
+        boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
+        String replacement = callback ? null : (String) handlerMethod.invoke(patch);
+        int argIndex = ma.index();
+        String invokeTarget = ma.target();
+        int wantOrdinal = ma.ordinal();
+        int[] seen = {0};
+        int[] matched = {0};
         target.instrument(new ExprEditor() {
             @Override public void edit(MethodCall mc) throws CannotCompileException {
                 if (!invokeTarget.isEmpty() && !mc.getMethodName().equals(invokeTarget)
@@ -263,7 +263,7 @@ public class ExprInstrumenter {
 
     public static void applyModifyVariable(CtClass ctClass, IClassPatch patch, Method handlerMethod, ModifyVariable mv, PatchContext ctx) throws Exception {
         CtMethod target = EngineUtils.findMethod(ctClass, mv.method(), mv.desc());
-        final boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
+        boolean callback = EngineUtils.isCallbackMethod(handlerMethod);
         if (mv.line() > 0) {
             String modification = callback
                     ? CallbackSourceBuilder.buildModifyVariableLineCallback(
@@ -320,7 +320,7 @@ public class ExprInstrumenter {
         StringBuilder sb = new StringBuilder("{");
         sb.append("Object[] jffl_args = new Object[")
           .append(paramTypes.length).append("];");
-        for (int i = 0; i < paramTypes.length; i++) {
+        for (int i=0;i<paramTypes.length;i++) {
             sb.append("jffl_args[").append(i)
               .append("] = ($w)$").append(i + 1).append(";");
         }
@@ -351,14 +351,14 @@ public class ExprInstrumenter {
         CtMethod target = EngineUtils.findMethod(ctClass, wop.method(), wop.desc());
         At at = wop.at();
         int[] sliceRange = InjectionPoints.resolveSliceRange(target, wop.slice());
-        final int sliceFrom = sliceRange[0];
-        final int sliceTo = sliceRange[1];
-        final int wantOrdinal = at.ordinal();
-        final String targetCallee = at.target();
-        final int[] seen = {0};
-        final int[] matched = {0};
-        final int handlerId = CallbackDispatcher.register(patch, handlerMethod, true);
-        final String selfExpr = Modifier.isStatic(target.getModifiers()) ? "null" : "$0";
+        int sliceFrom = sliceRange[0];
+        int sliceTo = sliceRange[1];
+        int wantOrdinal = at.ordinal();
+        String targetCallee = at.target();
+        int[] seen = {0};
+        int[] matched = {0};
+        int handlerId = CallbackDispatcher.register(patch, handlerMethod, true);
+        String selfExpr = Modifier.isStatic(target.getModifiers()) ? "null" : "$0";
         if (at.value() == At.Value.INVOKE) {
             target.instrument(new ExprEditor() {
                 @Override public void edit(MethodCall mc) throws CannotCompileException {
@@ -416,7 +416,7 @@ public class ExprInstrumenter {
         CtClass returnType = mc.getMethod().getReturnType();
         StringBuilder sb = new StringBuilder("{");
         sb.append("Object[] jffl_args = new Object[").append(paramTypes.length).append("];");
-        for (int i = 0; i < paramTypes.length; i++) {
+        for (int i=0;i<paramTypes.length;i++) {
             sb.append("jffl_args[").append(i).append("] = ($w)$").append(i + 1).append(";");
         }
         sb.append("java.util.concurrent.Callable jffl_original = new java.util.concurrent.Callable() {")

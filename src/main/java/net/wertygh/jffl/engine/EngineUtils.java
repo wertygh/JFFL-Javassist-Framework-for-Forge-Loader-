@@ -67,7 +67,7 @@ public class EngineUtils {
         if (params == null || params.trim().isEmpty()) return new CtClass[0];
         String[] parts = params.split(",");
         CtClass[] result = new CtClass[parts.length];
-        for (int i = 0; i < parts.length; i++) {
+        for (int i=0;i<parts.length;i++) {
             String p = parts[i].trim();
             int spaceIdx = p.lastIndexOf(' ');
             String typeName = spaceIdx > 0 ? p.substring(0, spaceIdx).trim() : p;
@@ -106,7 +106,7 @@ public class EngineUtils {
 
     public static String[] argRefsForParams(int count) {
         String[] refs = new String[count];
-        for (int i = 0; i < count; i++) refs[i] = "$" + (i + 1);
+        for (int i=0;i<count;i++) refs[i] = "$" + (i + 1);
         return refs;
     }
 
@@ -230,7 +230,7 @@ public class EngineUtils {
 
     public static String safePatchId(String patchClassName) {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < patchClassName.length(); i++) {
+        for (int i=0;i<patchClassName.length();i++) {
             char c = patchClassName.charAt(i);
             if (Character.isLetterOrDigit(c)) sb.append(c);
             else sb.append('_');

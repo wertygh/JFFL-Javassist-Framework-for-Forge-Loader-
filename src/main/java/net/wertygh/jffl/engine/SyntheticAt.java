@@ -15,7 +15,7 @@ class SyntheticAt {
         } else if (mc.longValue() != Long.MIN_VALUE) {
             numericValue = (double) mc.longValue();
         }
-        final double finalNumeric = numericValue;
+        double finalNumeric = numericValue;
         return (At) Proxy.newProxyInstance(
                 At.class.getClassLoader(),
                 new Class<?>[]{At.class},

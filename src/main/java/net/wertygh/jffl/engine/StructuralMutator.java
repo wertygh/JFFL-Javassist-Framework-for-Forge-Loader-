@@ -19,8 +19,8 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
 
-public final class StructuralMutator {
-    private static final Logger LOGGER = LoggerFactory.getLogger(StructuralMutator.class);
+public class StructuralMutator {
+    private static Logger LOGGER = LoggerFactory.getLogger(StructuralMutator.class);
 
     public static void generateAccessor(CtClass ctClass, Accessor acc) throws Exception {
         if (acc.invoker()) {
@@ -35,19 +35,19 @@ public final class StructuralMutator {
             sb.append(priv.getReturnType().getName())
               .append(' ').append(bridgeName).append('(');
             CtClass[] params = priv.getParameterTypes();
-            for (int i = 0; i < params.length; i++) {
+            for (int i=0;i<params.length;i++) {
                 if (i > 0) sb.append(", ");
                 sb.append(params[i].getName()).append(" arg").append(i);
             }
-            sb.append(") { ");
+            sb.append(") {");
             if (priv.getReturnType() != CtClass.voidType) sb.append("return ");
             if (isStatic) sb.append(ctClass.getName()).append('.');
             sb.append(acc.target()).append('(');
-            for (int i = 0; i < params.length; i++) {
+            for (int i=0;i<params.length;i++) {
                 if (i > 0) sb.append(", ");
                 sb.append("arg").append(i);
             }
-            sb.append("); }");
+            sb.append(");}");
             ctClass.addMethod(CtNewMethod.make(sb.toString(), ctClass));
         } else {
             CtField f = ctClass.getDeclaredField(acc.target());
@@ -55,12 +55,12 @@ public final class StructuralMutator {
             String setName = "jffl$set$" + acc.target();
             if (!EngineUtils.hasMethod(ctClass, getName)) {
                 ctClass.addMethod(CtNewMethod.make(
-                        "public " + f.getType().getName() + " " + getName + "() { return this." + acc.target() + "; }",
+                        "public " + f.getType().getName() + " " + getName + "() {return this." + acc.target() + ";}",
                         ctClass));
             }
             if (!EngineUtils.hasMethod(ctClass, setName)) {
                 ctClass.addMethod(CtNewMethod.make(
-                        "public void " + setName + "(" + f.getType().getName() + " v) { this." + acc.target() + " = v; }",
+                        "public void " + setName + "(" + f.getType().getName() + " v) {this." + acc.target() + " = v;}",
                         ctClass));
             }
         }
@@ -78,7 +78,7 @@ public final class StructuralMutator {
             if (isStatic) sb.append("static ");
             sb.append(priv.getReturnType().getName()).append(' ').append(bridgeName).append('(');
             CtClass[] params = priv.getParameterTypes();
-            for (int i = 0; i < params.length; i++) {
+            for (int i=0;i<params.length;i++) {
                 if (i > 0) sb.append(", ");
                 sb.append(params[i].getName()).append(" arg").append(i);
             }
@@ -86,7 +86,7 @@ public final class StructuralMutator {
             if (priv.getReturnType() != CtClass.voidType) sb.append("return ");
             if (isStatic) sb.append(ctClass.getName()).append('.');
             sb.append(sh.target()).append('(');
-            for (int i = 0; i < params.length; i++) {
+            for (int i=0;i<params.length;i++) {
                 if (i > 0) sb.append(", ");
                 sb.append("arg").append(i);
             }
@@ -100,12 +100,12 @@ public final class StructuralMutator {
             String tn = f.getType().getName();
             if (!EngineUtils.hasMethod(ctClass, getName)) {
                 ctClass.addMethod(CtNewMethod.make(
-                        "public " + tn + " " + getName + "() { return this." + sh.target() + "; }",
+                        "public " + tn + " " + getName + "() {return this." + sh.target() + ";}",
                         ctClass));
             }
             if (!EngineUtils.hasMethod(ctClass, setName)) {
                 ctClass.addMethod(CtNewMethod.make(
-                        "public void " + setName + "(" + tn + " v) { this." + sh.target() + " = v; }",
+                        "public void " + setName + "(" + tn + " v) {this." + sh.target() + " = v;}",
                         ctClass));
             }
             LOGGER.debug("@Shadow field: 生成 {}.{}/{}", ctClass.getName(), getName, setName);
@@ -118,7 +118,7 @@ public final class StructuralMutator {
         StringBuilder helperSrc = new StringBuilder();
         helperSrc.append("private static void ").append(helperName).append("(");
         CtClass[] paramTypes = ctor.getParameterTypes();
-        for (int i = 0; i < paramTypes.length; i++) {
+        for (int i=0;i<paramTypes.length;i++) {
             if (i > 0) helperSrc.append(", ");
             helperSrc.append(paramTypes[i].getName()).append(" arg").append(i);
         }
@@ -136,7 +136,7 @@ public final class StructuralMutator {
             CodeIterator it = ca.iterator();
             Bytecode bc = new Bytecode(mi.getConstPool());
             int slot = 1;
-            for (int i = 0; i < paramTypes.length; i++) {
+            for (int i=0;i<paramTypes.length;i++) {
                 addLoadInstruction(bc, paramTypes[i], slot);
                 slot += (paramTypes[i] == CtClass.longType || paramTypes[i] == CtClass.doubleType) ? 2 : 1;
             }
