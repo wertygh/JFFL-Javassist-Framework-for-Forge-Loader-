@@ -11,7 +11,7 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 
 public class MethodCopier {
-    private static final Logger LOGGER = LoggerFactory.getLogger(MethodCopier.class);
+    private static Logger LOGGER = LoggerFactory.getLogger(MethodCopier.class);
     
     public static String copyMethod(byte[] patchClassBytes, String sourceMethodName, String sourceMethodDesc, ClassNode targetNode, String mergedName) {
         ClassNode patchNode = new ClassNode();
@@ -53,7 +53,15 @@ public class MethodCopier {
         return new CopyResult(cw.toByteArray(), finalName);
     }
 
-    public record CopyResult(byte[] classBytes, String mergedMethodName) {}
+    public static class CopyResult {
+        public byte[] classBytes;
+        public String mergedMethodName;
+
+        public CopyResult(byte[] classBytes, String mergedMethodName) {
+            this.classBytes = classBytes;
+            this.mergedMethodName = mergedMethodName;
+        }
+    }
     
     private static MethodNode findMethod(ClassNode cn, String name, String desc) {
         for (MethodNode mn : cn.methods) {
@@ -142,7 +150,7 @@ public class MethodCopier {
                 remapFrameTypes(frame.local, patchOwner, targetOwner);
                 remapFrameTypes(frame.stack, patchOwner, targetOwner);
             } else if (insn instanceof InvokeDynamicInsnNode indy) {
-                for (int i = 0; i < indy.bsmArgs.length; i++) {
+                for (int i=0;i<indy.bsmArgs.length;i++) {
                     if (indy.bsmArgs[i] instanceof Type t) {
                         String desc = t.getDescriptor().replace(
                                 "L" + patchOwner + ";",
@@ -177,7 +185,7 @@ public class MethodCopier {
 
     private static void remapFrameTypes(List<Object> types, String patchOwner, String targetOwner) {
         if (types == null) return;
-        for (int i = 0; i < types.size(); i++) {
+        for (int i=0;i<types.size();i++) {
             Object t = types.get(i);
             if (patchOwner.equals(t)) {
                 types.set(i, targetOwner);
