@@ -112,6 +112,13 @@ dependencies {
 }
 
 shadowJar {
+    from("License_javassist.html") {
+        into "META-INF"
+        rename {"JAVASSIST_LICENSE.html"}
+    }
+    from("LICENSE") {
+        into "META-INF"
+    }
     configurations = [project.configurations.shade]
     dependencies {
         exclude(dependency('org.javassist:javassist:.*'))
