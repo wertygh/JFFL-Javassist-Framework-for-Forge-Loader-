@@ -1,5 +1,6 @@
 package net.wertygh.jffl.service;
 
+import net.wertygh.jffl.api.IAdditionalClassHook;
 import net.wertygh.jffl.classpath.ClassPathBuilder;
 import net.wertygh.jffl.engine.PatchEngine;
 import net.wertygh.jffl.env.DevEnvironment;
@@ -10,12 +11,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.net.URL;
 import java.util.*;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 public class JavassistTransformationService implements ITransformationService {
-    private static final Logger LOGGER = LoggerFactory.getLogger(JavassistTransformationService.class);
-    private final PatchRegistry registry = new PatchRegistry();
-    private PatchEngine engine;
+    private static Logger LOGGER = LoggerFactory.getLogger(JavassistTransformationService.class);
+    public PatchRegistry registry = new PatchRegistry();
+    public PatchEngine engine;
 
     @Override public @NotNull String name() {return "jffl_javassist";}
 
@@ -92,6 +96,55 @@ public class JavassistTransformationService implements ITransformationService {
             return List.of();
         }
         return List.copyOf(out);
+    }
+
+    @Override
+    public Map.Entry<Set<String>, Supplier<Function<String, Optional<URL>>>> additionalClassesLocator() {
+        Set<String> prefixes = registry.getAdditionalClassPrefixes();
+        if (prefixes.isEmpty()) return null;
+        return Map.entry(prefixes, () -> this::locateAdditionalClass);
+    }
+
+    private Optional<URL> locateAdditionalClass(String resourceName) {
+        if (resourceName == null || !resourceName.endsWith(".class")) return Optional.empty();
+        for (PatchRegistry.TransformerPluginEntry entry : registry.getTransformerPlugins()) {
+            String matchedPrefix = matchAdditionalClassPrefix(entry, resourceName);
+            if (matchedPrefix == null) continue;
+            try {
+                IAdditionalClassHook hook = new AdditionalClassHook(resourceName, matchedPrefix);
+                Optional<URL> found = entry.plugin.locateAdditionalClass(hook);
+                if (found != null && found.isPresent()) return found;
+            } catch (Throwable t) {
+                LOGGER.error("插件{}定位额外类{}失败", entry.displayName(), resourceName, t);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static String matchAdditionalClassPrefix(PatchRegistry.TransformerPluginEntry entry, String resourceName) {
+        for (String prefix : entry.additionalClassPrefixes) {
+            if (resourceName.startsWith(prefix.replace('.', '/'))) return prefix;
+        }
+        return null;
+    }
+
+    private static class AdditionalClassHook implements IAdditionalClassHook {
+        private final String resourceName;
+        private final String internalName;
+        private final String className;
+        private final String matchedPrefix;
+
+        AdditionalClassHook(String resourceName, String matchedPrefix) {
+            this.resourceName = resourceName;
+            this.internalName = resourceName.substring(0, resourceName.length() - ".class".length());
+            this.className = this.internalName.replace('/', '.');
+            this.matchedPrefix = matchedPrefix;
+        }
+
+        @Override public String getResourceName() {return resourceName;}
+        @Override public String getInternalName() {return internalName;}
+        @Override public String getClassName() {return className;}
+        @Override public String getMatchedPrefix() {return matchedPrefix;}
     }
 
     public PatchRegistry getRegistry() {return registry;}
