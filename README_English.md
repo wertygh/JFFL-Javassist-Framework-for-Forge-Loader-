@@ -51,7 +51,7 @@ In development environment (jffl.dev=true):
 
 ## License
 
-BSD Zero Clause License
+Apache License
 
 ---
 
