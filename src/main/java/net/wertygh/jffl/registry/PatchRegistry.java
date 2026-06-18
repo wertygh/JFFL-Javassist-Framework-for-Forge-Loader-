@@ -13,6 +13,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
@@ -41,6 +43,15 @@ public class PatchRegistry {
     public List<URLClassLoader> patchClassLoaders = new ArrayList<>();
     public long nextRegistrationOrder = 0L;
     public long nextPluginRegistrationOrder = 0L;
+    public final List<DeferredPatchEntry> deferredPatches = new ArrayList<>();
+    
+    public static class DeferredPatchEntry {
+        public String patchClassName;
+        public String targetClass;
+        public int priority;
+        public String sourceJarPath;
+    }
+    
     public static class PatchEntry implements Comparable<PatchEntry> {
         public String targetClass;
         public int priority;
@@ -50,6 +61,7 @@ public class PatchRegistry {
         public long registrationOrder;
         public List<String> dependencies;
         public List<String> optionalDependencies;
+        public boolean skeleton;
 
         public PatchEntry(String targetClass, int priority, IClassPatch patch, String sourceId, String patchClassName, long registrationOrder, List<String> dependencies, List<String> optionalDependencies) {
             this.targetClass = targetClass;
@@ -60,6 +72,7 @@ public class PatchRegistry {
             this.registrationOrder = registrationOrder;
             this.dependencies = dependencies;
             this.optionalDependencies = optionalDependencies;
+            this.skeleton = patch == null;
         }
 
         @Override
@@ -211,7 +224,7 @@ public class PatchRegistry {
         Class<?> clazz = patch.getClass();
         Patch[] anns = clazz.getAnnotationsByType(Patch.class);
         if (anns.length == 0) {
-            LOGGER.error("补丁类{}没有@Patch注解, 无法注册", clazz.getName());
+            LOGGER.error("类{}没有@Patch注解, 无法注册", clazz.getName());
             return;
         }
         for (Patch ann : anns) {
@@ -227,15 +240,211 @@ public class PatchRegistry {
                 collectRequiredDependencies(clazz, ann),
                 collectOptionalDependencies(clazz)
             );
-            allPatches.add(entry);
-            List<PatchEntry> list = patchIndex.computeIfAbsent(target, k -> new ArrayList<>());
-            list.add(entry);
-            list.sort(Comparator.naturalOrder());
-            LOGGER.info("为目标{}注册了补丁{}(优先级{}, 来源={})",
-                    target, clazz.getSimpleName(), ann.priority(), entry.sourceId);
+            addEntry(entry);
         }
     }
 
+    public void registerSkeleton(String targetClass, int priority, String patchClassName, String sourceId, List<String> dependencies, List<String> optionalDependencies) {
+        PatchEntry entry = new PatchEntry(
+            targetClass, priority, null,
+            sourceId, patchClassName, nextRegistrationOrder++,
+            dependencies, optionalDependencies
+        );
+        addEntry(entry);
+    }
+
+    public void activateSkeleton(String patchClassName, IClassPatch patch) {
+        for (List<PatchEntry> entries : patchIndex.values()) {
+            for (int i = 0; i < entries.size(); i++) {
+                PatchEntry entry = entries.get(i);
+                if (entry.skeleton && entry.patchClassName.equals(patchClassName)) {
+                    entry.patch = patch;
+                    entry.skeleton = false;
+                    LOGGER.debug("骨架条目激活: {}", patchClassName);
+                    return;
+                }
+            }
+        }
+        for (PatchEntry entry : allPatches) {
+            if (entry.skeleton && entry.patchClassName.equals(patchClassName)) {
+                entry.patch = patch;
+                entry.skeleton = false;
+                return;
+            }
+        }
+        LOGGER.warn("未找到要激活的骨架条目: {}", patchClassName);
+    }
+    
+    private void addEntry(PatchEntry entry) {
+        allPatches.add(entry);
+        List<PatchEntry> list = patchIndex.computeIfAbsent(
+            entry.targetClass, k -> new ArrayList<>());
+        list.add(entry);
+        list.sort(Comparator.naturalOrder());
+        LOGGER.info("为目标{}注册了补丁{}(优先级{}, 来源={}, {})",
+                entry.targetClass, entry.patchClassName, entry.priority,
+                entry.sourceId, entry.skeleton ? "骨架" : "完整");
+    }
+    
+    public List<DeferredPatchEntry> getDeferredPatches() {
+        return Collections.unmodifiableList(deferredPatches);
+    }
+    
+    public List<PatchEntry> getSkeletonEntries() {
+        List<PatchEntry> skeletons = new ArrayList<>();
+        for (PatchEntry entry : allPatches) {
+            if (entry.skeleton) skeletons.add(entry);
+        }
+        return skeletons;
+    }
+    
+    public void clearDeferredPatches() {
+        deferredPatches.clear();
+    }
+    
+    public void scanDirectoryDeferred(File modsDir) {
+        if (!modsDir.exists() || !modsDir.isDirectory()) {
+            LOGGER.warn("未找到补丁目录：{}", modsDir);
+            return;
+        }
+        detectMixinTargets(modsDir);
+        File[] jars = modsDir.listFiles((d, n) -> n.endsWith(".jar"));
+        if (jars == null || jars.length == 0) return;
+        for (File jar : jars) {
+            scanJarDeferred(jar);
+        }
+    }
+    
+    public void scanClassPathDeferred(String classpath) {
+        if (classpath == null || classpath.isBlank()) return;
+        for (String entry : classpath.split(File.pathSeparator)) {
+            if (entry.isBlank()) continue;
+            File f = new File(entry);
+            if (f.exists() && f.isFile() && entry.endsWith(".jar")) {
+                scanJarDeferred(f);
+            } else if (f.exists() && f.isDirectory()) {
+                scanDirectoryDeferred(f);
+            }
+        }
+    }
+
+    public void scanModClassesDeferred(String modClasses) {
+        if (modClasses == null || modClasses.isBlank()) return;
+        Set<String> seen = new LinkedHashSet<>();
+        for (String entry : modClasses.split(File.pathSeparator)) {
+            if (entry.isBlank()) continue;
+            int sep = entry.indexOf("%%");
+            String path = sep >= 0 ? entry.substring(sep + 2) : entry;
+            if (!path.isBlank() && seen.add(path)) {
+                File f = new File(path);
+                if (f.exists()) {
+                    if (f.isDirectory()) scanDirectoryDeferred(f);
+                    else if (f.isFile() && path.endsWith(".jar")) scanJarDeferred(f);
+                }
+            }
+        }
+    }
+
+    private void scanJarDeferred(File jarFile) {
+        try (JarFile jar = new JarFile(jarFile)) {
+            Set<String> classNames = new LinkedHashSet<>();
+            String patchList = null;
+            if (jar.getManifest() != null) {
+                patchList = jar.getManifest().getMainAttributes()
+                    .getValue("JFFL-Patches");
+            }
+            JarEntry serviceEntry = jar.getJarEntry("META-INF/JFFL/IClassPatch.txt");
+            if (patchList == null && serviceEntry == null) return;
+            String currentPrefix = null;
+            if (patchList != null) {
+                for (String name : patchList.split(",")) {
+                    String trimmed = name.trim();
+                    if (!trimmed.isEmpty()) classNames.add(trimmed);
+                }
+            }
+            if (serviceEntry != null) {
+                try (InputStream is = jar.getInputStream(serviceEntry);
+                     Scanner scanner = new Scanner(is)) {
+                    while (scanner.hasNextLine()) {
+                        String line = scanner.nextLine().trim();
+                        if (line.isEmpty() || line.startsWith("#")) continue;
+                        if (line.startsWith("Plugin:")) continue;
+                        if (line.endsWith("#")) {
+                            currentPrefix = line.substring(0, line.length() - 1);
+                            if (!currentPrefix.endsWith(".")) currentPrefix += ".";
+                            continue;
+                        }
+                        if (line.endsWith(".*")) {
+                            String pkg = line.substring(0, line.length() - 2);
+                            classNames.addAll(scanPackageInJar(jar, pkg));
+                            continue;
+                        }
+                        if (currentPrefix != null && !line.contains(".")) {
+                            classNames.add(currentPrefix + line);
+                        } else {
+                            classNames.add(line);
+                        }
+                    }
+                }
+            }
+            for (String className : classNames) {
+                readPatchAnnotationFromJar(jar, className, jarFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            LOGGER.error("扫描JAR中的补丁类失败：{}", jarFile, e);
+        }
+    }
+
+    private void readPatchAnnotationFromJar(JarFile jar, String className, String jarPath) {
+        String classEntry = className.replace('.', '/') + ".class";
+        JarEntry entry = jar.getJarEntry(classEntry);
+        if (entry == null) {
+            LOGGER.warn("在{}中未找到类{}", jarPath, className);
+            return;
+        }
+        try (InputStream is = jar.getInputStream(entry)) {
+            readPatchAnnotationFromStream(is, className, jarPath);
+        } catch (IOException e) {
+            LOGGER.error("读取补丁类{}失败：{}", className, jarPath, e);
+        }
+    }
+
+    private void readPatchAnnotationFromStream(InputStream classStream, String className, String jarPath) throws IOException {
+        ClassReader cr = new ClassReader(classStream);
+        String[] targetClass = {null};
+        int[] priority = {1000};
+        cr.accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
+                if ("Lnet/wertygh/jffl/api/annotation/Patch;".equals(desc)) {
+                    return new AnnotationVisitor(Opcodes.ASM9) {
+                        @Override
+                        public void visit(String name, Object value) {
+                            if ("value".equals(name)) {
+                                targetClass[0] = (String) value;
+                            } else if ("priority".equals(name)) {
+                                priority[0] = (Integer) value;
+                            }
+                        }
+                    };
+                }
+                return null;
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        if (targetClass[0] == null || targetClass[0].isEmpty()) {
+            LOGGER.warn("补丁类{}缺少@Patch注解, 来自: {}", className, jarPath);
+            return;
+        }
+        DeferredPatchEntry dp = new DeferredPatchEntry();
+        dp.patchClassName = className;
+        dp.targetClass = targetClass[0];
+        dp.priority = priority[0];
+        dp.sourceJarPath = jarPath;
+        deferredPatches.add(dp);
+        LOGGER.debug("发现延迟补丁: {} -> {} (优先级 {}, 来源={})",
+                className, targetClass[0], priority[0], jarPath);
+    }
+    
     private static List<String> collectRequiredDependencies(Class<?> clazz, Patch patch) {
         LinkedHashSet<String> deps = new LinkedHashSet<>();
         for (String dep : patch.dependsOn()) {
@@ -404,21 +613,6 @@ public class PatchRegistry {
         return -1;
     }
 
-    public void scanDirectory(File modsDir) {
-        if (!modsDir.exists() || !modsDir.isDirectory()) {
-            LOGGER.warn("未找到补丁目录：{}", modsDir);
-            return;
-        }
-        detectMixinTargets(modsDir);
-        File[] jars = modsDir.listFiles((d, n) -> n.endsWith(".jar"));
-        if (jars == null || jars.length == 0) return;
-        URLClassLoader loader = buildPatchClassLoader(List.of(jars));
-        patchClassLoaders.add(loader);
-        for (File jar : jars) {
-            scanJar(jar, loader);
-        }
-    }
-
     private void scanJar(File jarFile) {
         URLClassLoader loader = buildPatchClassLoader(List.of(jarFile));
         patchClassLoaders.add(loader);
@@ -516,7 +710,12 @@ public class PatchRegistry {
     public List<PatchEntry> getPatches(String className) {
         List<PatchEntry> list = patchIndex.getOrDefault(className, Collections.emptyList());
         if (list.isEmpty()) return list;
-        return Collections.unmodifiableList(resolveDependencies(className, list));
+        List<PatchEntry> active = new ArrayList<>();
+        for (PatchEntry e : list) {
+            if (!e.skeleton) active.add(e);
+        }
+        if (active.isEmpty()) return active;
+        return Collections.unmodifiableList(resolveDependencies(className, active));
     }
 
     private List<PatchEntry> resolveDependencies(String targetClass, List<PatchEntry> source) {
@@ -627,52 +826,10 @@ public class PatchRegistry {
         for (TransformerPluginEntry entry : transformerPlugins) {
             targets.addAll(entry.targetClasses);
         }
+        for (DeferredPatchEntry dp : deferredPatches) {
+            targets.add(dp.targetClass);
+        }
         return Collections.unmodifiableSet(targets);
-    }
-
-    public void scanClassPath(String classpath) {
-        if (classpath == null || classpath.isBlank()) return;
-        List<File> entries = new ArrayList<>();
-        for (String entry : classpath.split(File.pathSeparator)) {
-            if (entry.isBlank()) continue;
-            File f = new File(entry);
-            if (f.exists() && (f.isDirectory() || entry.endsWith(".jar"))) entries.add(f);
-        }
-        if (entries.isEmpty()) return;
-        URLClassLoader loader = buildPatchClassLoader(entries);
-        patchClassLoaders.add(loader);
-        for (File f : entries) {
-            if (f.isDirectory()) {
-                scanDirectoryEntry(f, loader);
-            } else if (f.getName().endsWith(".jar")) {
-                scanJar(f, loader);
-            }
-        }
-    }
-
-    public void scanModClasses(String modClasses) {
-        if (modClasses == null || modClasses.isBlank()) return;
-        Set<String> seen = new LinkedHashSet<>();
-        List<File> entries = new ArrayList<>();
-        for (String entry : modClasses.split(File.pathSeparator)) {
-            if (entry.isBlank()) continue;
-            int sep = entry.indexOf("%%");
-            String path = sep >= 0 ? entry.substring(sep + 2) : entry;
-            if (!path.isBlank() && seen.add(path)) {
-                File f = new File(path);
-                if (f.exists() && (f.isDirectory() || (f.isFile() && path.endsWith(".jar")))) entries.add(f);
-            }
-        }
-        if (entries.isEmpty()) return;
-        URLClassLoader loader = buildPatchClassLoader(entries);
-        patchClassLoaders.add(loader);
-        for (File f : entries) {
-            if (f.isDirectory()) {
-                scanDirectoryEntry(f, loader);
-            } else if (f.isFile() && f.getName().endsWith(".jar")) {
-                scanJar(f, loader);
-            }
-        }
     }
 
     private void scanDirectoryEntry(File dir) {
