@@ -30,7 +30,7 @@ public class JavassistTransformationService implements ITransformationService {
             LOGGER.info("JFFL跳过SRG映射加载, 使用MCP/Mojang名称");
         }
     }
-
+    
     @Override
     public void initialize(IEnvironment environment) {
         LOGGER.info("JFFL正在初始化, 扫描补丁中");
@@ -38,24 +38,23 @@ public class JavassistTransformationService implements ITransformationService {
         if (DevEnvironment.isDev()) {
             String modClasses = System.getenv("MOD_CLASSES");
             if (modClasses != null && !modClasses.isBlank()) {
-                registry.scanModClasses(modClasses);
-                LOGGER.info("已扫描MOD_CLASSES目录来源");
+                registry.scanModClassesDeferred(modClasses);
+                LOGGER.info("已扫描MOD_CLASSES目录来源(延迟模式)");
             } else {
                 LOGGER.info("MOD_CLASSES未设置, 退到java.class.path");
             }
             String jvmCp = ClassPathBuilder.getJvmClassPath();
             if (jvmCp != null && !jvmCp.isEmpty()) {
-                registry.scanClassPath(jvmCp);
+                registry.scanClassPathDeferred(jvmCp);
             }
             File modsDir = new File("mods");
             if (modsDir.isDirectory()) {
-                registry.scanDirectory(modsDir);
+                registry.scanDirectoryDeferred(modsDir);
             }
         } else {
             File modsDir = new File("mods");
-            registry.scanDirectory(modsDir);
+            registry.scanDirectoryDeferred(modsDir);
         }
-
         int discovered = registry.getTargetClasses().size() - before;
         engine = new PatchEngine(registry);
         try {
@@ -73,12 +72,10 @@ public class JavassistTransformationService implements ITransformationService {
             } else {
                 LOGGER.warn("无法为Javassist ClassPool构建完整的类路径", e);
             }
-        }
+        }    
         if (!DevEnvironment.isProduction()) {
             LOGGER.info("当前开发环境, 跳过SRG映射加载");
         }
-        LOGGER.info("JFFL已初始化：{}个补丁目标类, {}个插件",
-                registry.getTargetClasses().size(), registry.getTransformerPlugins().size());
     }
 
     @Override
