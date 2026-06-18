@@ -25,6 +25,10 @@ public class PatchApplicator {
 
     public void applyPatch(CtClass ctClass, PatchRegistry.PatchEntry entry, PatchContext ctx) throws Exception {
         IClassPatch patch = entry.patch;
+        if (patch == null) {
+            LOGGER.warn("补丁条目{}的patch为null", entry.displayName());
+            return;
+        }
         String patchOwner = entry.displayName();
         Class<?> patchClass = patch.getClass();
         Patch[] patchAnns = patchClass.getAnnotationsByType(Patch.class);
